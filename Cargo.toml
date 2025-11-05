@@ -6,7 +6,7 @@ authors = ["Aguacero7 <naps@teamnaps.fr>"]
 license = "GPL-2.0"
 description = "High-level NTS (Network Time Security) Client library based on ntpd-rs"
 repository = "https://github.com/aguacero7/rkik-nts"
-keywords = ["nts", "ntp", "time", "network-time-security", "client"]
+keywords = ["nts", "ntp", "time", "time-security", "client"]
 categories = ["network-programming", "date-and-time"]
 readme = "README.md"
 

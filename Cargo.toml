@@ -1,0 +1,52 @@
+[package]
+name = "rkik-nts"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aguacero7 <naps@teamnaps.fr>"]
+license = "GPLv2"
+description = "High-level NTS (Network Time Security) Client library based on ntpd-rs"
+repository = "https://github.com/aguacero7/rkik-nts"
+keywords = ["nts", "ntp", "time", "network-time-security", "client"]
+categories = ["network-programming", "date-and-time"]
+readme = "README.md"
+
+[dependencies]
+ntp-proto = { version = "1.4", features = ["__internal-test"] }
+tokio = { version = "1.40", features = ["full"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = "0.8"
+webpki-roots = "0.26"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tracing-subscriber = "0.3"
+
+[features]
+default = []
+serde = ["dep:serde"]
+tracing-subscriber = ["dep:tracing-subscriber"]
+
+[lib]
+name = "rkik_nts"
+path = "src/lib.rs"
+
+[[example]]
+name = "simple_client"
+path = "examples/simple_client.rs"
+required-features = ["tracing-subscriber"]
+
+[[example]]
+name = "custom_config"
+path = "examples/custom_config.rs"
+required-features = ["tracing-subscriber"]
+
+[[example]]
+name = "rkik_diagnostics"
+path = "examples/rkik_diagnostics.rs"
+required-features = ["tracing-subscriber"]
+

@@ -55,7 +55,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .take(16)
                         .map(|b| format!("{:02x}", b))
                         .collect();
-                    println!("    Cookie {}: {} {}",
+                    println!(
+                        "    Cookie {}: {} {}",
                         i + 1,
                         preview.join(" "),
                         if cookie.len() > 16 { "..." } else { "" }
@@ -65,7 +66,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Err(e) => {
             eprintln!("✗ NTS-KE failed: {}", e);
-            println!("\nDiagnostic hint: Check firewall, DNS resolution, and port 4460 accessibility");
+            println!(
+                "\nDiagnostic hint: Check firewall, DNS resolution, and port 4460 accessibility"
+            );
             return Ok(());
         }
     }
@@ -92,7 +95,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if time.is_ahead() {
                 println!("  ⚠  System clock is AHEAD by {} ms", time.offset_signed());
             } else if time.is_behind() {
-                println!("  ⚠  System clock is BEHIND by {} ms", time.offset_signed().abs());
+                println!(
+                    "  ⚠  System clock is BEHIND by {} ms",
+                    time.offset_signed().abs()
+                );
             } else {
                 println!("  ✓  System clock is synchronized");
             }
@@ -133,8 +139,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             offsets.push(offset);
             rtts.push(rtt);
 
-            println!("  Sample {}: offset={:+6} ms, RTT={:4} ms",
-                i, offset, rtt);
+            println!("  Sample {}: offset={:+6} ms, RTT={:4} ms", i, offset, rtt);
         }
     }
 
@@ -142,9 +147,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let avg_offset: i64 = offsets.iter().sum::<i64>() / offsets.len() as i64;
         let avg_rtt: u128 = rtts.iter().sum::<u128>() / rtts.len() as u128;
 
-        let variance: i64 = offsets.iter()
+        let variance: i64 = offsets
+            .iter()
             .map(|&x| (x - avg_offset).pow(2))
-            .sum::<i64>() / offsets.len() as i64;
+            .sum::<i64>()
+            / offsets.len() as i64;
         let std_dev = (variance as f64).sqrt();
 
         println!("\nStatistics:");

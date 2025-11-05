@@ -37,7 +37,13 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     let timeout_duration = config.timeout;
 
     let result = tokio::task::spawn_blocking(move || {
-        perform_nts_ke_blocking(server_addr, server_name, tls_config, protocol_version, timeout_duration)
+        perform_nts_ke_blocking(
+            server_addr,
+            server_name,
+            tls_config,
+            protocol_version,
+            timeout_duration,
+        )
     })
     .await
     .map_err(|e| Error::KeyExchange(format!("Task join error: {}", e)))??;
@@ -58,8 +64,8 @@ fn perform_nts_ke_blocking(
     timeout_duration: Duration,
 ) -> Result<KeyExchangeResult> {
     // Connect TCP socket (blocking)
-    let mut socket = std::net::TcpStream::connect_timeout(&server_addr, timeout_duration)
-        .map_err(Error::Io)?;
+    let mut socket =
+        std::net::TcpStream::connect_timeout(&server_addr, timeout_duration).map_err(Error::Io)?;
 
     socket.set_nonblocking(true).map_err(Error::Io)?;
 
@@ -137,15 +143,13 @@ fn build_tls_config(config: &NtsClientConfig) -> Result<ntp_proto::tls_utils::Cl
 
     if config.verify_tls_cert {
         // Normal verification with system certificates
-        let builder =
-            tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
+        let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
-        let verifier = tls_utils::PlatformVerifier::new_with_extra_roots(
-            std::iter::empty::<Certificate>(),
-        )
-        .map_err(|e| Error::Tls(format!("Failed to create verifier: {}", e)))?
-        .with_provider(provider);
+        let verifier =
+            tls_utils::PlatformVerifier::new_with_extra_roots(std::iter::empty::<Certificate>())
+                .map_err(|e| Error::Tls(format!("Failed to create verifier: {}", e)))?
+                .with_provider(provider);
 
         Ok(builder
             .dangerous()
@@ -155,8 +159,7 @@ fn build_tls_config(config: &NtsClientConfig) -> Result<ntp_proto::tls_utils::Cl
         // No verification mode (for self-signed certificates)
         warn!("TLS certificate verification is disabled!");
 
-        let builder =
-            tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
+        let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
         // Use NoVerification verifier
@@ -238,7 +241,10 @@ fn convert_ke_result(mut result: KeyExchangeResult, ke_duration: Duration) -> Nt
             .and_then(|mut addrs| addrs.next())
             .unwrap_or_else(|| {
                 // Fallback to localhost if resolution fails
-                warn!("Failed to resolve NTP server: {}, using localhost", result.remote);
+                warn!(
+                    "Failed to resolve NTP server: {}, using localhost",
+                    result.remote
+                );
                 SocketAddr::new("127.0.0.1".parse().unwrap(), result.port)
             })
     };
@@ -254,13 +260,7 @@ fn convert_ke_result(mut result: KeyExchangeResult, ke_duration: Duration) -> Nt
     // We use "AEAD_AES_SIV_CMAC_256" as default since it's the most common
     let aead_algorithm = "AEAD_AES_SIV_CMAC_256".to_string();
 
-    NtsKeResult::new(
-        ntp_server,
-        aead_algorithm,
-        cookies,
-        ke_duration,
-        result.nts,
-    )
+    NtsKeResult::new(ntp_server, aead_algorithm, cookies, ke_duration, result.nts)
 }
 
 /// Convert KeyExchangeError to our Error type
@@ -288,9 +288,7 @@ impl From<KeyExchangeError> for Error {
                 Error::KeyExchange("Invalid fixed key length".to_string())
             }
             KeyExchangeError::NoCookies => Error::KeyExchange("No cookies received".to_string()),
-            KeyExchangeError::CookiesTooBig => {
-                Error::KeyExchange("Cookies too big".to_string())
-            }
+            KeyExchangeError::CookiesTooBig => Error::KeyExchange("Cookies too big".to_string()),
             KeyExchangeError::Io(e) => Error::Io(e),
             KeyExchangeError::Tls(e) => Error::Tls(format!("TLS error: {:?}", e)),
             KeyExchangeError::Certificate(e) => Error::Tls(format!("Certificate error: {:?}", e)),

@@ -19,3 +19,10 @@
     - sudo apt install curl build-essential gcc make -y
     - 'curl --proto ''=https'' --tlsv1.2 -sSf https://sh.rustup.rs | sh   '
     shell: BASH
+  - action: cargo fmt --check
+    type: BUILD
+    docker_image_name: buddy/localshell
+    docker_image_tag: ubuntu_24.04
+    execute_commands:
+    - cargo fmt --check
+    shell: BASH

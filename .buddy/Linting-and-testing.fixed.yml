@@ -6,3 +6,16 @@
   - type: PUSH
   fail_on_prepare_env_warning: true
   resources: MEDIUM
+  actions:
+  - action: carbo build --release
+    type: BUILD
+    docker_image_name: buddy/localshell
+    docker_image_tag: ubuntu_24.04
+    execute_commands:
+    - carbo build --release
+    setup_commands:
+    - sudo apt update
+    - sudo apt upgrade -y
+    - sudo apt install curl build-essential gcc make -y
+    - 'curl --proto ''=https'' --tlsv1.2 -sSf https://sh.rustup.rs | sh   '
+    shell: BASH

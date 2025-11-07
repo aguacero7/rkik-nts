@@ -26,3 +26,10 @@
     execute_commands:
     - cargo fmt --check
     shell: BASH
+  - action: cargo clippy -D warnings
+    type: BUILD
+    docker_image_name: buddy/localshell
+    docker_image_tag: ubuntu_24.04
+    execute_commands:
+    - cargo clippy -D warnings
+    shell: BASH

@@ -66,6 +66,10 @@ pub struct NtsKeResult {
     pub(crate) ke_duration: std::time::Duration,
 
     /// The actual NTS data from ntp-proto (contains keys and cookies).
+    /// Note: Currently stored for future use with proper NTS authentication.
+    /// Will be used when transitioning from manual NTP packet construction
+    /// to ntp-proto's full client implementation.
+    #[allow(dead_code)]
     pub(crate) nts_data: Box<ntp_proto::SourceNtsData>,
 }
 
@@ -118,5 +122,68 @@ impl NtsKeResult {
     /// output or logging.
     pub fn cookies_ref(&self) -> Vec<&[u8]> {
         self.cookies.iter().map(|c| c.as_slice()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_time_snapshot_offset_signed_ahead() {
+        let network_time = SystemTime::now();
+        let system_time = network_time + Duration::from_secs(10);
+
+        let snapshot = TimeSnapshot {
+            system_time,
+            network_time,
+            offset: Duration::from_secs(10),
+            round_trip_delay: Duration::from_millis(50),
+            server: "test.server".to_string(),
+            authenticated: true,
+        };
+
+        assert!(snapshot.offset_signed() > 0);
+        assert!(snapshot.is_ahead());
+        assert!(!snapshot.is_behind());
+    }
+
+    #[test]
+    fn test_time_snapshot_offset_signed_behind() {
+        let system_time = SystemTime::now();
+        let network_time = system_time + Duration::from_secs(5);
+
+        let snapshot = TimeSnapshot {
+            system_time,
+            network_time,
+            offset: Duration::from_secs(5),
+            round_trip_delay: Duration::from_millis(50),
+            server: "test.server".to_string(),
+            authenticated: true,
+        };
+
+        assert!(snapshot.offset_signed() < 0);
+        assert!(!snapshot.is_ahead());
+        assert!(snapshot.is_behind());
+    }
+
+    #[test]
+    fn test_nts_ke_result_cookie_count() {
+        // Test cookie_count and has_cookies without creating full NtsKeResult
+        // since SourceNtsData doesn't have a public constructor
+        let cookies = vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8, 9]];
+        assert_eq!(cookies.len(), 2);
+        assert!(!cookies.is_empty());
+
+        let sizes: Vec<usize> = cookies.iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![4, 5]);
+    }
+
+    #[test]
+    fn test_nts_ke_result_empty_cookies() {
+        let cookies: Vec<Vec<u8>> = vec![];
+        assert_eq!(cookies.len(), 0);
+        assert!(cookies.is_empty());
     }
 }

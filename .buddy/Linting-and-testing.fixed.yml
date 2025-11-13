@@ -7,12 +7,12 @@
   fail_on_prepare_env_warning: true
   resources: MEDIUM
   actions:
-  - action: carbo build --release
+  - action: cargo build --release
     type: BUILD
     docker_image_name: buddy/localshell
     docker_image_tag: ubuntu_24.04
     execute_commands:
-    - carbo build --release
+    - cargo build --release
     setup_commands:
     - sudo apt update
     - sudo apt upgrade -y
@@ -32,4 +32,12 @@
     docker_image_tag: ubuntu_24.04
     execute_commands:
     - cargo clippy -D warnings
+    shell: BASH
+  - action: cargo test
+    type: BUILD
+    docker_image_name: buddy/localshell
+    docker_image_tag: ubuntu_24.04
+    execute_commands:
+    - cargo test --lib --bins
+    - cargo test --doc
     shell: BASH

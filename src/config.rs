@@ -121,3 +121,76 @@ impl NtsClientConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = NtsClientConfig::default();
+        assert_eq!(config.nts_ke_server, ""); // Default is empty
+        assert_eq!(config.nts_ke_port, 4460);
+        assert_eq!(config.ntp_version, 4);
+        assert!(config.verify_tls_cert);
+        // Default config with empty server should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_builder_pattern() {
+        let config = NtsClientConfig::new("custom.server.com")
+            .with_port(1234)
+            .with_timeout(std::time::Duration::from_secs(10))
+            .with_max_retries(5);
+
+        assert_eq!(config.nts_ke_server, "custom.server.com");
+        assert_eq!(config.nts_ke_port, 1234);
+        assert_eq!(config.timeout, std::time::Duration::from_secs(10));
+        assert_eq!(config.max_retries, 5);
+    }
+
+    #[test]
+    fn test_empty_server_validation() {
+        let config = NtsClientConfig {
+            nts_ke_server: String::new(),
+            ..Default::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("hostname is required"));
+    }
+
+    #[test]
+    fn test_invalid_ntp_version() {
+        let config = NtsClientConfig {
+            ntp_version: 2,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = NtsClientConfig {
+            ntp_version: 5,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_valid_ntp_versions() {
+        let config3 = NtsClientConfig::new("test.server.com").with_ntp_version(3);
+        assert!(config3.validate().is_ok());
+
+        let config4 = NtsClientConfig::new("test.server.com").with_ntp_version(4);
+        assert!(config4.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tls_verification_disable() {
+        let config = NtsClientConfig::new("test.server.com").with_tls_verification(false);
+        assert!(!config.verify_tls_cert);
+    }
+}

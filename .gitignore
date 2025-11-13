@@ -2,9 +2,14 @@
 /target/
 **/*.rs.bk
 *.pdb
+*.orig
 
 # Cargo
-Cargo.lock
+# Note: Cargo.lock is tracked for reproducible builds
+# Uncomment below to ignore it:
+# Cargo.lock
+.cargo/
+Cargo.toml.orig
 
 # IDE
 .vscode/
@@ -13,9 +18,6 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
-
-# CI/CD
-.buddy/
 
 # Testing
 *.profraw

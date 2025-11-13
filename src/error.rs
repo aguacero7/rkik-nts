@@ -55,3 +55,33 @@ impl From<rustls::Error> for Error {
         Error::Tls(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        let err = Error::Timeout;
+        assert_eq!(err.to_string(), "Operation timed out");
+
+        let err = Error::InvalidConfig("test error".to_string());
+        assert_eq!(err.to_string(), "Invalid configuration: test error");
+
+        let err = Error::ServerUnavailable("server down".to_string());
+        assert_eq!(err.to_string(), "Server unreachable: server down");
+    }
+
+    #[test]
+    fn test_io_error_conversion() {
+        let io_err = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        let err: Error = io_err.into();
+        assert!(matches!(err, Error::Io(_)));
+    }
+
+    #[test]
+    fn test_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Error>();
+    }
+}

@@ -2,8 +2,9 @@
 name = "rkik-nts"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70"
 authors = ["Aguacero7 <naps@teamnaps.fr>"]
-license = "GPL-2.0"
+license = "GPL-2.0-or-later"
 description = "High-level NTS (Network Time Security) Client library based on ntpd-rs"
 repository = "https://github.com/aguacero7/rkik-nts"
 keywords = ["nts", "ntp", "time", "time-security", "client"]
@@ -11,8 +12,13 @@ categories = ["network-programming", "date-and-time"]
 readme = "README.md"
 
 [dependencies]
+# Note: Using __internal-test feature temporarily until ntp-proto provides
+# stable public API for NTS key exchange. This feature exposes internal types
+# (KeyExchangeClient, KeyExchangeResult, SourceNtsData) required for NTS-KE.
+# TODO: Work with ntp-proto maintainers to stabilize these APIs or migrate to
+# alternative implementation when stable APIs become available.
 ntp-proto = { version = "1.6.2", features = ["__internal-test"] }
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.40", features = ["net", "time", "rt-multi-thread", "macros"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"

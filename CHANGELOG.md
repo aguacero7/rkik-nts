@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Ensured IPv6 compatibility with bind address being either `0.0.0.0:0` or `[::]:0`
+
 ## [0.1.0] - 2025-11-05
 
 ### Added

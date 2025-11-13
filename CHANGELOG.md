@@ -4,7 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Ensured IPv6 compatibility with bind address being either `0.0.0.0:0` or `[::]:0`
+- Ensured IPv6 compatibility with bind address being either `[::]:0`  or `0.0.0.0:0` if the remote server is detected as ipv6 or not
+- Dependencies Version Bumped (thiserror = "2.0.17", webpki-roots = "1.0.4")
 
 ## [0.1.0] - 2025-11-05
 

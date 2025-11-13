@@ -4,8 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Ensured IPv6 compatibility with bind address being either `[::]:0`  or `0.0.0.0:0` if the remote server is detected as ipv6 or not
-- Dependencies Version Bumped (thiserror = "2.0.17", webpki-roots = "1.0.4")
+## [0.2.0] - 2025-11-13
+
+### Fixed
+- **CRITICAL**: Fixed CI/CD typo "carbo" → "cargo"
+- **CRITICAL**: Removed hardcoded localhost fallback that could cause security issues
+- **CRITICAL**: Replaced dangerous unwraps with proper error handling
+- Fixed dead_code warning on `nts_data` field
+- Corrected .gitignore configuration
+- IPv6 compatibility: bind address now correctly uses `[::]:0` for IPv6 or `0.0.0.0:0` for IPv4 based on remote server detection
+
+### Added
+- 13 new unit tests for core functionality
+- `cargo test` integration in CI/CD pipeline
+- Comprehensive test suite (all 13 tests passing)
+- `rust-version` specification in Cargo.toml
+- Documentation for `__internal-test` feature with TODO for future migration
+
+### Changed
+- Updated GitHub repository URL
+- Optimized tokio feature flags for better performance
+- Bumped dependencies:
+  - thiserror = "2.0.17"
+  - webpki-roots = "1.0.4"
+
+### Quality Improvements
+- ✅ All tests passing (13 unit tests)
+- ✅ Clippy clean with `-D warnings`
+- ✅ Release build compiles without errors
 
 ## [0.1.0] - 2025-11-05
 

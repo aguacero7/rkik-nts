@@ -224,12 +224,11 @@ impl NtsClient {
             + std::time::Duration::from_nanos(nanos);
         let system_time = SystemTime::now();
 
-        // Calculate offset
-        let offset = if system_time > network_time {
-            system_time.duration_since(network_time).unwrap()
-        } else {
-            network_time.duration_since(system_time).unwrap()
-        };
+        // Calculate offset using abs_diff to avoid potential panics
+        // This handles both positive and negative time differences safely
+        let offset = system_time
+            .duration_since(network_time)
+            .unwrap_or_else(|e| e.duration());
 
         // For now, we'll use a simple round-trip delay estimation
         let round_trip_delay = self.config.timeout / 10;

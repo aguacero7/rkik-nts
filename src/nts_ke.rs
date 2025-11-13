@@ -52,7 +52,7 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     debug!("NTS-KE completed in {:?}", ke_duration);
 
     // Convert KeyExchangeResult to NtsKeResult
-    Ok(convert_ke_result(result, ke_duration))
+    convert_ke_result(result, ke_duration)
 }
 
 /// Perform NTS-KE in a blocking context
@@ -228,7 +228,10 @@ async fn resolve_server(server: &str, port: u16) -> Result<SocketAddr> {
 }
 
 /// Convert ntp-proto's KeyExchangeResult to our NtsKeResult
-fn convert_ke_result(mut result: KeyExchangeResult, ke_duration: Duration) -> NtsKeResult {
+fn convert_ke_result(
+    mut result: KeyExchangeResult,
+    ke_duration: Duration,
+) -> std::result::Result<NtsKeResult, Error> {
     // Try to parse the remote as an IP address first, otherwise resolve it
     let ntp_server = if let Ok(ip_addr) = result.remote.parse() {
         SocketAddr::new(ip_addr, result.port)
@@ -239,14 +242,12 @@ fn convert_ke_result(mut result: KeyExchangeResult, ke_duration: Duration) -> Nt
             .to_socket_addrs()
             .ok()
             .and_then(|mut addrs| addrs.next())
-            .unwrap_or_else(|| {
-                // Fallback to localhost if resolution fails
-                warn!(
-                    "Failed to resolve NTP server: {}, using localhost",
-                    result.remote
-                );
-                SocketAddr::new("127.0.0.1".parse().unwrap(), result.port)
-            })
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "Failed to resolve NTP server address: {}:{}. DNS resolution returned no results.",
+                    result.remote, result.port
+                ))
+            })?
     };
 
     // Extract cookies from the CookieStash by consuming them using the public API
@@ -260,7 +261,13 @@ fn convert_ke_result(mut result: KeyExchangeResult, ke_duration: Duration) -> Nt
     // We use "AEAD_AES_SIV_CMAC_256" as default since it's the most common
     let aead_algorithm = "AEAD_AES_SIV_CMAC_256".to_string();
 
-    NtsKeResult::new(ntp_server, aead_algorithm, cookies, ke_duration, result.nts)
+    Ok(NtsKeResult::new(
+        ntp_server,
+        aead_algorithm,
+        cookies,
+        ke_duration,
+        result.nts,
+    ))
 }
 
 /// Convert KeyExchangeError to our Error type

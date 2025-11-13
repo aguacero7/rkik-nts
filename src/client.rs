@@ -79,7 +79,13 @@ impl NtsClient {
         );
 
         // Create UDP socket for NTP queries
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        // Choose bind address based on server's address family
+        let bind_addr = if nts_result.ntp_server.is_ipv6() {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        };
+        let socket = UdpSocket::bind(bind_addr).await?;
         socket.connect(nts_result.ntp_server).await?;
 
         self.socket = Some(socket);

@@ -10,6 +10,8 @@
 //!
 //! - **Simple API**: Easy-to-use client interface with sensible defaults
 //! - **NTS Support**: Full Network Time Security implementation for authenticated time
+//! - **Certificate Diagnostics**: TLS certificate information capture for security auditing (v0.3.0+)
+//! - **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis (v0.3.0+)
 //! - **Async/Await**: Built on Tokio for efficient async I/O
 //! - **Configurable**: Flexible configuration options for advanced use cases
 //! - **Based on ntpd-rs**: Built on the battle-tested ntpd-rs implementation from Project Pendulum
@@ -54,6 +56,33 @@
 //!     .with_max_retries(3);
 //! ```
 //!
+//! ## Certificate Information (v0.3.0+)
+//!
+//! Access TLS certificate information from the NTS-KE handshake:
+//!
+//! ```no_run
+//! use rkik_nts::{NtsClient, NtsClientConfig};
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let config = NtsClientConfig::new("time.cloudflare.com");
+//! let mut client = NtsClient::new(config);
+//! client.connect().await?;
+//!
+//! // Access certificate information
+//! if let Some(ke_result) = client.nts_ke_info() {
+//!     if let Some(cert) = &ke_result.certificate {
+//!         println!("Certificate Subject: {}", cert.subject);
+//!         println!("Certificate Issuer: {}", cert.issuer);
+//!         println!("Valid: {} to {}", cert.valid_from, cert.valid_until);
+//!         println!("Fingerprint: {}", cert.fingerprint_sha256);
+//!         println!("Self-signed: {}", cert.is_self_signed);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Integration with rkik
 //!
 //! This library is designed for seamless integration with rkik, but can also be used
@@ -72,4 +101,4 @@ pub mod types;
 pub use client::NtsClient;
 pub use config::NtsClientConfig;
 pub use error::{Error, Result};
-pub use types::{NtsKeResult, TimeSnapshot};
+pub use types::{CertificateInfo, NtsKeResult, TimeSnapshot};

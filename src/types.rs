@@ -5,6 +5,41 @@ use std::time::SystemTime;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+/// Certificate information from the NTS-KE TLS handshake
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct CertificateInfo {
+    /// Subject of the certificate (CN, O, etc.)
+    pub subject: String,
+
+    /// Issuer of the certificate
+    pub issuer: String,
+
+    /// Certificate validity period start (RFC3339 format)
+    pub valid_from: String,
+
+    /// Certificate validity period end (RFC3339 format)
+    pub valid_until: String,
+
+    /// Serial number (hex format)
+    pub serial_number: String,
+
+    /// Subject Alternative Names (DNS names)
+    pub san_dns_names: Vec<String>,
+
+    /// Signature algorithm
+    pub signature_algorithm: String,
+
+    /// Public key algorithm
+    pub public_key_algorithm: String,
+
+    /// Certificate fingerprint (SHA-256, hex format)
+    pub fingerprint_sha256: String,
+
+    /// Whether the certificate is self-signed
+    pub is_self_signed: bool,
+}
+
 /// Result of a time synchronization query.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -71,6 +106,9 @@ pub struct NtsKeResult {
     /// to ntp-proto's full client implementation.
     #[allow(dead_code)]
     pub(crate) nts_data: Box<ntp_proto::SourceNtsData>,
+
+    /// TLS certificate information (optional, for diagnostics)
+    pub certificate: Option<CertificateInfo>,
 }
 
 impl NtsKeResult {
@@ -81,6 +119,7 @@ impl NtsKeResult {
         cookies: Vec<Vec<u8>>,
         ke_duration: std::time::Duration,
         nts_data: Box<ntp_proto::SourceNtsData>,
+        certificate: Option<CertificateInfo>,
     ) -> Self {
         Self {
             ntp_server,
@@ -88,6 +127,7 @@ impl NtsKeResult {
             cookies,
             ke_duration,
             nts_data,
+            certificate,
         }
     }
 

@@ -10,6 +10,8 @@ This library provides a simple, safe, and ergonomic API for querying time from N
 ## Features
 
 - **Secure**: Full NTS (Network Time Security) support for authenticated time queries
+- **Certificate Diagnostics**: TLS certificate information capture for security auditing and diagnostics
+- **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis
 - **Simple API**: Easy-to-use client interface with sensible defaults
 - **Async**: Built on Tokio for efficient async I/O
 - **Configurable**: Flexible configuration options for advanced use cases
@@ -22,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rkik-nts = "0.1"
+rkik-nts = "0.3"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -59,6 +61,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 cargo run --example simple_client --features tracing-subscriber
 ```
 
+### Certificate Information (New in v0.3.0)
+
+Access TLS certificate information from the NTS-KE handshake:
+
+```rust
+use rkik_nts::{NtsClient, NtsClientConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = NtsClientConfig::new("time.cloudflare.com");
+    let mut client = NtsClient::new(config);
+    client.connect().await?;
+
+    // Access certificate information
+    if let Some(ke_result) = client.nts_ke_info() {
+        if let Some(cert) = &ke_result.certificate {
+            println!("Certificate Subject: {}", cert.subject);
+            println!("Certificate Issuer: {}", cert.issuer);
+            println!("Valid from: {} to {}", cert.valid_from, cert.valid_until);
+            println!("SHA-256 Fingerprint: {}", cert.fingerprint_sha256);
+            println!("Self-signed: {}", cert.is_self_signed);
+        }
+    }
+
+    Ok(())
+}
+```
+
+Run the certificate example:
+
+```bash
+cargo run --example test_certificate --features tracing-subscriber
+```
+
 ### Custom Configuration
 
 ```rust
@@ -76,6 +112,25 @@ let time = client.get_time().await?;
 ```
 
 See the [examples/](examples/) directory for more detailed examples.
+
+## Advanced Features
+
+### TLS Traffic Analysis with SSLKEYLOGFILE
+
+For debugging and network analysis, you can capture TLS session keys for Wireshark decryption:
+
+```bash
+# Set environment variable to enable keylog
+export SSLKEYLOGFILE=/tmp/sslkeylog.txt
+
+# Run your application or example
+cargo run --example test_certificate --features tracing-subscriber
+
+# Use the keylog file in Wireshark:
+# Edit → Preferences → Protocols → TLS → (Pre)-Master-Secret log filename
+```
+
+This allows you to decrypt and analyze the NTS-KE TLS traffic in Wireshark for troubleshooting.
 
 ## Public NTS Servers
 

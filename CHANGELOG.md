@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-15
+
+### Added
+- **TLS Certificate Information Capture**: Full support for capturing and exposing TLS certificate details during NTS-KE handshake
+  - New `CertificateInfo` struct with comprehensive certificate details:
+    - Subject and Issuer information
+    - Validity period (valid_from, valid_until)
+    - Serial number (hex format)
+    - Subject Alternative Names (SANs)
+    - Signature and public key algorithms
+    - SHA-256 fingerprint
+    - Self-signed certificate detection
+  - `certificate` field added to `NtsKeResult` (publicly accessible)
+  - Custom `CapturingVerifier` that captures certificates while maintaining security
+  - Works with both verified and unverified (self-signed) certificate modes
+- New example `test_certificate` demonstrating certificate information extraction
+- **TLS Keylog Support**: Added `SSLKEYLOGFILE` environment variable support for Wireshark decryption
+  - Enables debugging of TLS-encrypted NTS-KE traffic
+  - Automatically logs TLS session keys when `SSLKEYLOGFILE` is set
+  - Useful for network analysis and troubleshooting
+- Three new dependencies for certificate parsing:
+  - `x509-parser = "0.18"` - X.509 certificate parsing
+  - `sha2 = "0.10"` - SHA-256 fingerprint calculation
+  - `chrono = "0.4"` - Date/time handling (transitive)
+
+### Changed
+- `NtsKeResult::new()` signature updated to accept `certificate: Option<CertificateInfo>`
+- `build_tls_config()` now returns tuple with captured certificates container
+- Enhanced debug logging to include certificate subject and issuer upon capture
+
+### Security
+- ✅ Certificate capture does NOT compromise security: all verification still delegated to platform verifier
+- ✅ Works in both verified and unverified modes
+- ✅ No changes to TLS handshake validation logic
+
+### Documentation
+- Added comprehensive inline documentation for `CertificateInfo` struct
+- Updated examples to demonstrate certificate feature
+- Certificate information is opt-in via `CertificateInfo` support with serde feature
+
 ## [0.2.0] - 2025-11-13
 
 ### Fixed

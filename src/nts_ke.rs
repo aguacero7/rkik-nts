@@ -2,16 +2,20 @@
 //!
 //! This module wraps ntp-proto's KeyExchangeClient to provide an async interface.
 
+use std::io::Write;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ntp_proto::{KeyExchangeClient, KeyExchangeError, KeyExchangeResult, ProtocolVersion};
+use rustls::pki_types::{CertificateDer, ServerName as RustlsServerName, UnixTime};
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
+use x509_parser::prelude::*;
 
 use crate::config::NtsClientConfig;
 use crate::error::{Error, Result};
-use crate::types::NtsKeResult;
+use crate::types::{CertificateInfo, NtsKeResult};
 
 /// Perform NTS-KE using ntp-proto's KeyExchangeClient
 pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResult> {
@@ -26,8 +30,8 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     let server_addr = resolve_server(&config.nts_ke_server, config.nts_ke_port).await?;
     debug!("Resolved server address: {}", server_addr);
 
-    // Build TLS config
-    let tls_config = build_tls_config(config)?;
+    // Build TLS config with certificate capturing
+    let (tls_config, captured_certs) = build_tls_config(config)?;
 
     // Determine protocol version (always V4 for now)
     let protocol_version = ProtocolVersion::V4;
@@ -51,8 +55,22 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     let ke_duration = ke_start.elapsed();
     debug!("NTS-KE completed in {:?}", ke_duration);
 
+    // Extract certificate information after successful handshake
+    let certificate = {
+        let certs = captured_certs.lock().unwrap();
+        if !certs.is_empty() {
+            extract_certificate_info(&certs)
+        } else {
+            None
+        }
+    };
+
+    if let Some(ref cert) = certificate {
+        debug!("Captured certificate: subject={}, issuer={}", cert.subject, cert.issuer);
+    }
+
     // Convert KeyExchangeResult to NtsKeResult
-    convert_ke_result(result, ke_duration)
+    convert_ke_result(result, ke_duration, certificate)
 }
 
 /// Perform NTS-KE in a blocking context
@@ -133,28 +151,178 @@ fn perform_nts_ke_blocking(
     }
 }
 
-/// Build TLS config for NTS-KE
-fn build_tls_config(config: &NtsClientConfig) -> Result<ntp_proto::tls_utils::ClientConfig> {
+/// Extract certificate information from the peer certificate
+fn extract_certificate_info(certs: &[CertificateDer<'_>]) -> Option<CertificateInfo> {
+    // Get the first certificate (server certificate)
+    let cert_der = certs.first()?;
+
+    // Parse the certificate using x509-parser
+    let (_, cert) = X509Certificate::from_der(cert_der.as_ref()).ok()?;
+
+    // Extract subject
+    let subject = cert.subject().to_string();
+
+    // Extract issuer
+    let issuer = cert.issuer().to_string();
+
+    // Extract validity period and convert to RFC3339-like format
+    let valid_from = format!("{}", cert.validity().not_before);
+    let valid_until = format!("{}", cert.validity().not_after);
+
+    // Extract serial number as hex string
+    let serial_number = format!("{:x}", cert.serial);
+
+    // Extract SANs (Subject Alternative Names)
+    let san_dns_names = cert
+        .subject_alternative_name()
+        .ok()
+        .flatten()
+        .map(|san| {
+            san.value
+                .general_names
+                .iter()
+                .filter_map(|gn| match gn {
+                    GeneralName::DNSName(name) => Some(name.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // Extract signature algorithm
+    let signature_algorithm = cert.signature_algorithm.algorithm.to_string();
+
+    // Extract public key algorithm
+    let public_key_algorithm = cert.public_key().algorithm.algorithm.to_string();
+
+    // Calculate SHA-256 fingerprint
+    let mut hasher = Sha256::new();
+    hasher.update(cert_der.as_ref());
+    let fingerprint_sha256 = format!("{:x}", hasher.finalize());
+
+    // Check if self-signed (simple check: subject == issuer)
+    let is_self_signed = cert.subject() == cert.issuer();
+
+    Some(CertificateInfo {
+        subject,
+        issuer,
+        valid_from,
+        valid_until,
+        serial_number,
+        san_dns_names,
+        signature_algorithm,
+        public_key_algorithm,
+        fingerprint_sha256,
+        is_self_signed,
+    })
+}
+
+/// Custom certificate verifier that captures the certificate chain
+#[derive(Debug)]
+struct CapturingVerifier {
+    inner: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    captured_certs: Arc<Mutex<Vec<CertificateDer<'static>>>>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for CapturingVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &RustlsServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        // Capture the certificates
+        let mut certs = self.captured_certs.lock().unwrap();
+        certs.push(end_entity.clone().into_owned());
+        for cert in intermediates {
+            certs.push(cert.clone().into_owned());
+        }
+
+        // Delegate to the real verifier
+        self.inner
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
+/// Build TLS config for NTS-KE with certificate capturing
+fn build_tls_config(
+    config: &NtsClientConfig,
+) -> Result<(
+    ntp_proto::tls_utils::ClientConfig,
+    Arc<Mutex<Vec<CertificateDer<'static>>>>,
+)> {
     use ntp_proto::tls_utils::{self, Certificate};
 
     // Ensure a default crypto provider is installed
     // This is safe to call multiple times - it will only install once
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // Enable TLS keylog for Wireshark decryption if SSLKEYLOGFILE is set
+    let key_log = std::env::var("SSLKEYLOGFILE")
+        .ok()
+        .and_then(|path| {
+            debug!("Enabling TLS keylog to: {}", path);
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .ok()
+        })
+        .map(|file| Arc::new(KeyLogFile(Mutex::new(file))) as Arc<dyn rustls::KeyLog>);
+
+    // Create container for captured certificates
+    let captured_certs = Arc::new(Mutex::new(Vec::new()));
+
     if config.verify_tls_cert {
         // Normal verification with system certificates
         let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
-        let verifier =
+        let platform_verifier =
             tls_utils::PlatformVerifier::new_with_extra_roots(std::iter::empty::<Certificate>())
                 .map_err(|e| Error::Tls(format!("Failed to create verifier: {}", e)))?
                 .with_provider(provider);
 
-        Ok(builder
+        // Wrap with capturing verifier
+        let capturing_verifier = CapturingVerifier {
+            inner: Arc::new(platform_verifier),
+            captured_certs: captured_certs.clone(),
+        };
+
+        let mut tls_config = builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_no_client_auth())
+            .with_custom_certificate_verifier(Arc::new(capturing_verifier))
+            .with_no_client_auth();
+
+        if let Some(kl) = key_log {
+            tls_config.key_log = kl;
+        }
+
+        Ok((tls_config, captured_certs))
     } else {
         // No verification mode (for self-signed certificates)
         warn!("TLS certificate verification is disabled!");
@@ -162,13 +330,24 @@ fn build_tls_config(config: &NtsClientConfig) -> Result<ntp_proto::tls_utils::Cl
         let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
-        // Use NoVerification verifier
-        let verifier = NoVerification { provider };
+        // Use NoVerification verifier wrapped with capturing
+        let no_verification = NoVerification { provider };
 
-        Ok(builder
+        let capturing_verifier = CapturingVerifier {
+            inner: Arc::new(no_verification),
+            captured_certs: captured_certs.clone(),
+        };
+
+        let mut tls_config = builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_no_client_auth())
+            .with_custom_certificate_verifier(Arc::new(capturing_verifier))
+            .with_no_client_auth();
+
+        if let Some(kl) = key_log {
+            tls_config.key_log = kl;
+        }
+
+        Ok((tls_config, captured_certs))
     }
 }
 
@@ -231,6 +410,7 @@ async fn resolve_server(server: &str, port: u16) -> Result<SocketAddr> {
 fn convert_ke_result(
     mut result: KeyExchangeResult,
     ke_duration: Duration,
+    certificate: Option<CertificateInfo>,
 ) -> std::result::Result<NtsKeResult, Error> {
     // Try to parse the remote as an IP address first, otherwise resolve it
     let ntp_server = if let Ok(ip_addr) = result.remote.parse() {
@@ -267,6 +447,7 @@ fn convert_ke_result(
         cookies,
         ke_duration,
         result.nts,
+        certificate,
     ))
 }
 
@@ -305,4 +486,28 @@ impl From<KeyExchangeError> for Error {
             }
         }
     }
+}
+
+/// KeyLog handler for writing TLS secrets to file (for Wireshark decryption)
+#[derive(Debug)]
+struct KeyLogFile(Mutex<std::fs::File>);
+
+impl rustls::KeyLog for KeyLogFile {
+    fn log(&self, label: &str, client_random: &[u8], secret: &[u8]) {
+        if let Ok(mut file) = self.0.lock() {
+            let _ = writeln!(
+                file,
+                "{} {} {}",
+                label,
+                to_hex(client_random),
+                to_hex(secret)
+            );
+            let _ = file.flush();
+        }
+    }
+}
+
+/// Encode bytes to hexadecimal string
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }

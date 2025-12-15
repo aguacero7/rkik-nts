@@ -1,6 +1,6 @@
 [package]
 name = "rkik-nts"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.70"
 authors = ["Aguacero7 <naps@teamnaps.fr>"]
@@ -24,9 +24,12 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"
 webpki-roots = "1.0.4"
 thiserror = "2.0.17"
-tracing = "0.1"
+tracing = "0.1.43"
 tracing-subscriber = { version = "0.3", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
+x509-parser = "0.18"
+sha2 = "0.10"
+chrono = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -56,3 +59,17 @@ name = "rkik_diagnostics"
 path = "examples/rkik_diagnostics.rs"
 required-features = ["tracing-subscriber"]
 
+[[example]]
+name = "validation_client"
+path = "examples/validation_client.rs"
+required-features = ["tracing-subscriber"]
+
+[[example]]
+name = "nts_ke_sslkeylog"
+path = "examples/nts_ke_sslkeylog.rs"
+required-features = ["tracing-subscriber"]
+
+[[example]]
+name = "test_certificate"
+path = "examples/test_certificate.rs"
+required-features = ["tracing-subscriber"]

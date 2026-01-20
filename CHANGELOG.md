@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Simplified `PlatformVerifier` initialization in TLS config by migrating from deprecated `new_with_extra_roots()` to new `new()` constructor
+  - Removed unnecessary error handling since `new()` returns `Self` directly and cannot fail
+  - Updated [nts_ke.rs:305-306](src/nts_ke.rs#L305-L306) to use the new API
+- Removed reference to non-existent `validation_client` example from Cargo.toml
+
+### Documentation
+- Updated INTEGRATION.md to reference version 0.3 instead of outdated 0.1
+
 ## [0.3.0] - 2025-12-15
 
 ### Added

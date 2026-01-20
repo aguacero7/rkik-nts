@@ -60,11 +60,6 @@ path = "examples/rkik_diagnostics.rs"
 required-features = ["tracing-subscriber"]
 
 [[example]]
-name = "validation_client"
-path = "examples/validation_client.rs"
-required-features = ["tracing-subscriber"]
-
-[[example]]
 name = "nts_ke_sslkeylog"
 path = "examples/nts_ke_sslkeylog.rs"
 required-features = ["tracing-subscriber"]

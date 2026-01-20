@@ -12,7 +12,7 @@ This document provides guidance on integrating `rkik-nts` with the rkik project.
 
 ```toml
 [dependencies]
-rkik-nts = "0.1"
+rkik-nts = "0.3"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -21,14 +21,6 @@ tokio = { version = "1", features = ["full"] }
 ```toml
 [dependencies]
 rkik-nts = { git = "https://github.com/aguacero7/rkik-nts", branch = "main" }
-tokio = { version = "1", features = ["full"] }
-```
-
-### As a Local Path Dependency
-
-```toml
-[dependencies]
-rkik-nts = { path = "../rkik-nts" }
 tokio = { version = "1", features = ["full"] }
 ```
 

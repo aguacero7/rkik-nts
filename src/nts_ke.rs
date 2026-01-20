@@ -302,10 +302,8 @@ fn build_tls_config(
         let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
-        let platform_verifier =
-            tls_utils::PlatformVerifier::new_with_extra_roots(std::iter::empty::<Certificate>())
-                .map_err(|e| Error::Tls(format!("Failed to create verifier: {}", e)))?
-                .with_provider(provider);
+        let platform_verifier = tls_utils::PlatformVerifier::new()
+            .with_provider(provider);
 
         // Wrap with capturing verifier
         let capturing_verifier = CapturingVerifier {

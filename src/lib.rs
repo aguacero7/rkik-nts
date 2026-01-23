@@ -9,12 +9,28 @@
 //! ## Features
 //!
 //! - **Simple API**: Easy-to-use client interface with sensible defaults
-//! - **NTS Support**: Full Network Time Security implementation for authenticated time
-//! - **Certificate Diagnostics**: TLS certificate information capture for security auditing (v0.3.0+)
-//! - **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis (v0.3.0+)
+//! - **Real NTS Authentication (RFC 8915)**: Proper cryptographic authentication of NTP queries
+//! - **AEAD Protection**: All NTP packets are authenticated using negotiated AEAD algorithms
+//! - **Anti-Replay**: Unique identifiers prevent replay attacks
+//! - **Cookie Management**: Automatic cookie consumption and replenishment
+//! - **Certificate Diagnostics**: TLS certificate information capture for security auditing
+//! - **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis
 //! - **Async/Await**: Built on Tokio for efficient async I/O
 //! - **Configurable**: Flexible configuration options for advanced use cases
 //! - **Based on ntpd-rs**: Built on the battle-tested ntpd-rs implementation from Project Pendulum
+//!
+//! ## Security
+//!
+//! This library implements real NTS authentication according to RFC 8915:
+//!
+//! - **NTS-KE (Key Exchange)**: TLS handshake to negotiate AEAD algorithm and obtain keys
+//! - **NTS-Protected NTP**: UDP packets contain NTS extension fields:
+//!   - Unique Identifier (anti-replay)
+//!   - NTS Cookie (authenticates client)
+//!   - Cookie Placeholder (requests new cookies)
+//!   - AEAD Authenticator (protects entire packet)
+//!
+//! All responses are cryptographically verified. Modified or spoofed responses are rejected.
 //!
 //! ## Quick Start
 //!
@@ -30,12 +46,12 @@
 //!     let mut client = NtsClient::new(config);
 //!     client.connect().await?;
 //!
-//!     // Query the current time
+//!     // Query the current time (authenticated)
 //!     let time = client.get_time().await?;
 //!
 //!     println!("Network time: {:?}", time.network_time);
 //!     println!("System time:  {:?}", time.system_time);
-//!     println!("Offset:       {:?}", time.offset);
+//!     println!("Offset:       {} ms", time.offset_signed());
 //!     println!("Authenticated: {}", time.authenticated);
 //!
 //!     Ok(())
@@ -56,7 +72,7 @@
 //!     .with_max_retries(3);
 //! ```
 //!
-//! ## Certificate Information (v0.3.0+)
+//! ## Certificate Information
 //!
 //! Access TLS certificate information from the NTS-KE handshake:
 //!
@@ -69,9 +85,11 @@
 //! let mut client = NtsClient::new(config);
 //! client.connect().await?;
 //!
-//! // Access certificate information
-//! if let Some(ke_result) = client.nts_ke_info() {
-//!     if let Some(cert) = &ke_result.certificate {
+//! // Access certificate and NTS-KE information
+//! if let Some(ke_info) = client.nts_ke_info() {
+//!     println!("AEAD Algorithm: {}", ke_info.aead_algorithm);
+//!     println!("Initial Cookies: {}", ke_info.initial_cookie_count);
+//!     if let Some(cert) = &ke_info.certificate {
 //!         println!("Certificate Subject: {}", cert.subject);
 //!         println!("Certificate Issuer: {}", cert.issuer);
 //!         println!("Valid: {} to {}", cert.valid_from, cert.valid_until);
@@ -95,10 +113,11 @@ pub mod client;
 pub mod config;
 pub mod error;
 mod nts_ke;
+pub(crate) mod nts_ntp;
 pub mod types;
 
 // Re-export main types for convenience
-pub use client::NtsClient;
+pub use client::{NtsClient, NtsKeInfo};
 pub use config::NtsClientConfig;
 pub use error::{Error, Result};
-pub use types::{CertificateInfo, NtsKeResult, TimeSnapshot};
+pub use types::{CertificateInfo, TimeSnapshot};

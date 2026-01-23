@@ -1,20 +1,30 @@
-//! High-level NTS client implementation.
+//! High-level NTS client implementation with real RFC 8915 authentication.
 
 use std::net::SocketAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use ntp_proto::PollInterval;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::NtsClientConfig;
 use crate::error::{Error, Result};
 use crate::nts_ke::perform_nts_ke;
-use crate::types::{NtsKeResult, TimeSnapshot};
+use crate::nts_ntp::NtsState;
+use crate::types::{CertificateInfo, TimeSnapshot};
 
 /// A high-level NTS (Network Time Security) client.
 ///
-/// This client handles NTS key exchange and authenticated NTP time queries.
+/// This client handles NTS key exchange and authenticated NTP time queries
+/// according to RFC 8915. All time queries are cryptographically authenticated
+/// using AEAD encryption with keys negotiated during the NTS-KE handshake.
+///
+/// # Security
+///
+/// - NTP packets contain NTS extension fields (Unique ID, Cookie, Authenticator)
+/// - AEAD verification is performed on every response
+/// - Spoofed or modified responses are rejected
+/// - Cookies are consumed and replenished automatically
 ///
 /// # Examples
 ///
@@ -29,18 +39,40 @@ use crate::types::{NtsKeResult, TimeSnapshot};
 ///     // Connect and perform NTS key exchange
 ///     client.connect().await?;
 ///
-///     // Get the current time
+///     // Get the current time (authenticated)
 ///     let time = client.get_time().await?;
 ///     println!("Network time: {:?}", time.network_time);
-///     println!("Offset: {:?}", time.offset);
+///     println!("Offset: {} ms", time.offset_signed());
+///     println!("Authenticated: {}", time.authenticated);
 ///
 ///     Ok(())
 /// }
 /// ```
 pub struct NtsClient {
     config: NtsClientConfig,
-    nts_state: Option<NtsKeResult>,
+    /// NTS cryptographic state (ciphers and cookies).
+    nts_state: Option<NtsState>,
+    /// UDP socket for NTP queries.
     socket: Option<UdpSocket>,
+    /// NTP server address from NTS-KE.
+    ntp_server: Option<SocketAddr>,
+    /// NTS-KE diagnostic information.
+    ke_info: Option<NtsKeInfo>,
+}
+
+/// Diagnostic information from the NTS-KE handshake.
+#[derive(Debug, Clone)]
+pub struct NtsKeInfo {
+    /// The NTP server address negotiated during NTS-KE.
+    pub ntp_server: SocketAddr,
+    /// The negotiated AEAD algorithm.
+    pub aead_algorithm: String,
+    /// Duration of the NTS-KE handshake.
+    pub ke_duration: std::time::Duration,
+    /// TLS certificate information.
+    pub certificate: Option<CertificateInfo>,
+    /// Initial cookie count from NTS-KE.
+    pub initial_cookie_count: usize,
 }
 
 impl NtsClient {
@@ -54,10 +86,17 @@ impl NtsClient {
             config,
             nts_state: None,
             socket: None,
+            ntp_server: None,
+            ke_info: None,
         }
     }
 
     /// Connect to the NTS server and perform key exchange.
+    ///
+    /// This performs the NTS-KE handshake over TLS to negotiate:
+    /// - AEAD algorithm
+    /// - Client-to-server and server-to-client encryption keys
+    /// - Initial pool of cookies
     ///
     /// This must be called before querying time.
     ///
@@ -73,32 +112,66 @@ impl NtsClient {
         // Perform NTS key exchange
         let nts_result = perform_nts_ke(&self.config).await?;
 
+        let ntp_server = nts_result.ntp_server;
+        let aead_algorithm = nts_result.aead_algorithm.clone();
+        let ke_duration = nts_result.ke_duration();
+        let certificate = nts_result.certificate.clone();
+        let initial_cookie_count = nts_result.cookie_count();
+
         info!(
-            "NTS key exchange successful. NTP server: {}",
-            nts_result.ntp_server
+            "NTS key exchange successful. NTP server: {}, cookies: {}",
+            ntp_server, initial_cookie_count
         );
 
         // Create UDP socket for NTP queries
         // Choose bind address based on server's address family
-        let bind_addr = if nts_result.ntp_server.is_ipv6() {
+        let bind_addr = if ntp_server.is_ipv6() {
             "[::]:0"
         } else {
             "0.0.0.0:0"
         };
         let socket = UdpSocket::bind(bind_addr).await?;
-        socket.connect(nts_result.ntp_server).await?;
+        socket.connect(ntp_server).await?;
+
+        // Extract NTS state for authenticated queries
+        let nts_state = nts_result.into_nts_state();
 
         self.socket = Some(socket);
-        self.nts_state = Some(nts_result);
+        self.nts_state = Some(nts_state);
+        self.ntp_server = Some(ntp_server);
+        self.ke_info = Some(NtsKeInfo {
+            ntp_server,
+            aead_algorithm,
+            ke_duration,
+            certificate,
+            initial_cookie_count,
+        });
 
         Ok(())
     }
 
     /// Query the current time from the NTS-secured NTP server.
     ///
+    /// This creates an NTS-authenticated NTP request with:
+    /// - Unique Identifier extension field (anti-replay)
+    /// - NTS Cookie extension field
+    /// - Cookie Placeholder extension fields (to replenish cookies)
+    /// - AEAD authenticator
+    ///
+    /// The response is verified using:
+    /// - AEAD decryption and verification
+    /// - Unique Identifier matching
+    /// - Origin timestamp matching
+    ///
+    /// Only after successful verification is `authenticated` set to `true`.
+    ///
     /// # Errors
     ///
-    /// Returns an error if not connected or if the time query fails.
+    /// Returns an error if:
+    /// - Not connected (call `connect()` first)
+    /// - No cookies available (need to reconnect)
+    /// - AEAD verification fails (response tampered or spoofed)
+    /// - Response doesn't match request (replay attack detected)
     ///
     /// # Examples
     ///
@@ -109,6 +182,7 @@ impl NtsClient {
     /// let mut client = NtsClient::new(NtsClientConfig::new("time.cloudflare.com"));
     /// client.connect().await?;
     /// let time = client.get_time().await?;
+    /// assert!(time.authenticated);
     /// # Ok(())
     /// # }
     /// ```
@@ -118,15 +192,30 @@ impl NtsClient {
             .as_ref()
             .ok_or_else(|| Error::Other("Not connected. Call connect() first.".to_string()))?;
 
-        let nts_state = self.nts_state.as_ref().ok_or_else(|| {
+        let nts_state = self.nts_state.as_mut().ok_or_else(|| {
             Error::Other("No NTS state available. Call connect() first.".to_string())
         })?;
 
-        // Create NTP request packet
-        let request = self.create_ntp_request()?;
+        let ntp_server = self.ntp_server.ok_or_else(|| {
+            Error::Other("No NTP server configured. Call connect() first.".to_string())
+        })?;
+
+        // Check if we have cookies available
+        if !nts_state.has_cookies() {
+            return Err(Error::MissingNtsCookie);
+        }
+
+        debug!(
+            "Creating NTS-authenticated NTP request ({} cookies available)",
+            nts_state.cookie_count()
+        );
+
+        // Create NTS-authenticated NTP request
+        let poll_interval = PollInterval::default();
+        let request = nts_state.create_request(poll_interval)?;
 
         // Send request
-        debug!("Sending NTP request");
+        debug!("Sending NTS request ({} bytes)", request.len());
         socket.send(&request).await?;
 
         // Receive response with timeout
@@ -137,11 +226,36 @@ impl NtsClient {
 
         buf.truncate(len);
 
-        // Parse response
-        debug!("Received {} bytes, parsing NTP response", len);
-        let time_snapshot = self.parse_ntp_response(&buf, nts_state)?;
+        // Parse and verify response (AEAD verification happens here)
+        debug!("Received {} bytes, verifying NTS response", len);
+        let nts_response = nts_state.parse_response(&buf)?;
 
-        Ok(time_snapshot)
+        debug!(
+            "NTS response verified. Stratum: {}, authenticated: {}, cookies remaining: {}",
+            nts_response.stratum,
+            nts_response.authenticated,
+            nts_state.cookie_count()
+        );
+
+        // Warn if cookie count is getting low
+        if nts_state.needs_more_cookies() {
+            warn!(
+                "Cookie count is low ({}). Consider reconnecting if queries fail.",
+                nts_state.cookie_count()
+            );
+        }
+
+        // Convert NtsResponse to TimeSnapshot
+        let offset = nts_response.offset();
+
+        Ok(TimeSnapshot {
+            system_time: nts_response.system_time,
+            network_time: nts_response.network_time,
+            offset,
+            round_trip_delay: nts_response.round_trip_delay,
+            server: ntp_server.to_string(),
+            authenticated: nts_response.authenticated,
+        })
     }
 
     /// Check if the client is connected and ready to query time.
@@ -151,96 +265,57 @@ impl NtsClient {
 
     /// Get the NTP server address being used.
     pub fn ntp_server(&self) -> Option<SocketAddr> {
-        self.nts_state.as_ref().map(|s| s.ntp_server)
+        self.ntp_server
     }
 
-    /// Get a reference to the NTS key exchange result for diagnostic purposes.
+    /// Get the current cookie count.
+    ///
+    /// Each NTP query consumes one cookie, and responses may provide new ones.
+    /// If this reaches zero, you need to reconnect to get fresh cookies.
+    pub fn cookie_count(&self) -> usize {
+        self.nts_state
+            .as_ref()
+            .map(|s| s.cookie_count())
+            .unwrap_or(0)
+    }
+
+    /// Check if the client needs more cookies.
+    ///
+    /// Returns `true` if the cookie count is below the minimum threshold.
+    pub fn needs_more_cookies(&self) -> bool {
+        self.nts_state
+            .as_ref()
+            .map(|s| s.needs_more_cookies())
+            .unwrap_or(true)
+    }
+
+    /// Get diagnostic information from the NTS-KE handshake.
     ///
     /// This provides access to NTS-KE negotiation details including:
     /// - AEAD algorithm
-    /// - Cookie count and sizes
+    /// - Initial cookie count
     /// - Key exchange duration
+    /// - TLS certificate information
     ///
     /// Returns `None` if not connected.
-    pub fn nts_ke_info(&self) -> Option<&NtsKeResult> {
-        self.nts_state.as_ref()
+    pub fn nts_ke_info(&self) -> Option<&NtsKeInfo> {
+        self.ke_info.as_ref()
     }
 
     /// Reconnect and perform a fresh NTS key exchange.
     ///
-    /// This can be useful if the connection has been idle for a long time
-    /// or if the server has rotated keys.
+    /// This is useful when:
+    /// - The connection has been idle for a long time
+    /// - The server has rotated keys
+    /// - Cookies have been exhausted
+    /// - AEAD verification failures indicate stale keys
     pub async fn reconnect(&mut self) -> Result<()> {
         debug!("Reconnecting to NTS server");
         self.socket = None;
         self.nts_state = None;
+        self.ntp_server = None;
+        self.ke_info = None;
         self.connect().await
-    }
-
-    fn create_ntp_request(&self) -> Result<Vec<u8>> {
-        // Create a basic NTP client request packet
-        // This is a simplified version - in production, you'd use the full ntp-proto capabilities
-
-        let mut packet = vec![0u8; 48]; // Minimum NTP packet size
-
-        // LI (2 bits) = 0, VN (3 bits) = 4, Mode (3 bits) = 3 (client)
-        packet[0] = 0x23; // 0b00_100_011
-
-        // Poll interval
-        packet[2] = 6;
-
-        // Transmit timestamp (current time)
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| Error::Other(format!("System time error: {}", e)))?;
-
-        let ntp_time = now.as_secs() + 2_208_988_800; // NTP epoch offset
-        let frac = ((now.subsec_nanos() as u64) << 32) / 1_000_000_000;
-
-        packet[40..48].copy_from_slice(&ntp_time.to_be_bytes());
-        packet[44..48].copy_from_slice(&(frac as u32).to_be_bytes());
-
-        Ok(packet)
-    }
-
-    fn parse_ntp_response(&self, data: &[u8], nts_state: &NtsKeResult) -> Result<TimeSnapshot> {
-        if data.len() < 48 {
-            return Err(Error::InvalidResponse("NTP packet too small".to_string()));
-        }
-
-        // Extract transmit timestamp from server (bytes 40-47)
-        // NTP timestamp is: 4 bytes seconds + 4 bytes fraction
-        let tx_secs = u32::from_be_bytes([data[40], data[41], data[42], data[43]]);
-        let tx_frac = u32::from_be_bytes([data[44], data[45], data[46], data[47]]);
-
-        // Convert NTP timestamp to Unix timestamp
-        // NTP epoch is 1900-01-01, Unix epoch is 1970-01-01
-        // Difference is 2208988800 seconds
-        let unix_secs = tx_secs.wrapping_sub(2_208_988_800) as u64;
-        let nanos = ((tx_frac as u64) * 1_000_000_000) >> 32;
-
-        let network_time = UNIX_EPOCH
-            + std::time::Duration::from_secs(unix_secs)
-            + std::time::Duration::from_nanos(nanos);
-        let system_time = SystemTime::now();
-
-        // Calculate offset using abs_diff to avoid potential panics
-        // This handles both positive and negative time differences safely
-        let offset = system_time
-            .duration_since(network_time)
-            .unwrap_or_else(|e| e.duration());
-
-        // For now, we'll use a simple round-trip delay estimation
-        let round_trip_delay = self.config.timeout / 10;
-
-        Ok(TimeSnapshot {
-            system_time,
-            network_time,
-            offset,
-            round_trip_delay,
-            server: nts_state.ntp_server.to_string(),
-            authenticated: true, // NTS provides authentication
-        })
     }
 }
 

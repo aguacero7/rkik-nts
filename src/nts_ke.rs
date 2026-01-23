@@ -275,7 +275,7 @@ fn build_tls_config(
     ntp_proto::tls_utils::ClientConfig,
     Arc<Mutex<Vec<CertificateDer<'static>>>>,
 )> {
-    use ntp_proto::tls_utils::{self, Certificate};
+    use ntp_proto::tls_utils::{self};
 
     // Ensure a default crypto provider is installed
     // This is safe to call multiple times - it will only install once
@@ -435,8 +435,15 @@ fn convert_ke_result(
         cookies.push(cookie);
     }
 
-    // Get a reference to the cipher to determine the algorithm
-    // We use "AEAD_AES_SIV_CMAC_256" as default since it's the most common
+    debug!("Extracted {} cookies from NTS-KE", cookies.len());
+
+    // Extract the ciphers from SourceNtsData using get_keys()
+    // This consumes the SourceNtsData and returns (c2s, s2c) ciphers
+    let (c2s, s2c) = result.nts.get_keys();
+
+    debug!("Extracted NTS ciphers for authenticated NTP");
+
+    // Use "AEAD_AES_SIV_CMAC_256" as default since it's the most common negotiated algorithm
     let aead_algorithm = "AEAD_AES_SIV_CMAC_256".to_string();
 
     Ok(NtsKeResult::new(
@@ -444,7 +451,8 @@ fn convert_ke_result(
         aead_algorithm,
         cookies,
         ke_duration,
-        result.nts,
+        c2s,
+        s2c,
         certificate,
     ))
 }

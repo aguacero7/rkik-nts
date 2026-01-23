@@ -4,14 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-23
+
+### Added
+- Enforced NTS response validation for origin timestamps and Unique Identifiers
+- Explicit error variants for missing cookies, missing authenticators, AEAD failures, and malformed NTS extensions
+- New end-to-end example `nts_end_to_end` for authenticated NTS verification
+
 ### Fixed
+- Reject unauthenticated NTP responses that lack NTS encrypted fields
 - Simplified `PlatformVerifier` initialization in TLS config by migrating from deprecated `new_with_extra_roots()` to new `new()` constructor
   - Removed unnecessary error handling since `new()` returns `Self` directly and cannot fail
   - Updated [nts_ke.rs:305-306](src/nts_ke.rs#L305-L306) to use the new API
 - Removed reference to non-existent `validation_client` example from Cargo.toml
 
 ### Documentation
-- Updated INTEGRATION.md to reference version 0.3 instead of outdated 0.1
+- Updated README and INTEGRATION.md for version 0.4 usage and the new NTS validation example
 
 ## [0.3.0] - 2025-12-15
 
@@ -108,4 +116,5 @@ All notable changes to this project will be documented in this file.
 - Examples of basic and advanced usage
 - List of public NTS servers for testing
 
-[Unreleased]: https://github.com/aguacero7/rkik-nts/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/aguacero7/rkik-nts/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/aguacero7/rkik-nts/compare/v0.3.0...v0.4.0

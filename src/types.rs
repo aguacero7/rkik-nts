@@ -2,6 +2,8 @@
 
 use std::time::SystemTime;
 
+use ntp_proto::Cipher;
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -86,7 +88,10 @@ impl TimeSnapshot {
 }
 
 /// NTS key exchange result containing the negotiated parameters.
-#[derive(Debug)]
+///
+/// This struct holds all the information needed for NTS-protected NTP
+/// communication, including the cryptographic keys, cookies, and server
+/// information negotiated during the NTS-KE handshake.
 pub struct NtsKeResult {
     /// The NTP server to use for time queries.
     pub ntp_server: std::net::SocketAddr,
@@ -100,25 +105,40 @@ pub struct NtsKeResult {
     /// Duration of the NTS-KE handshake (for diagnostics).
     pub(crate) ke_duration: std::time::Duration,
 
-    /// The actual NTS data from ntp-proto (contains keys and cookies).
-    /// Note: Currently stored for future use with proper NTS authentication.
-    /// Will be used when transitioning from manual NTP packet construction
-    /// to ntp-proto's full client implementation.
-    #[allow(dead_code)]
-    pub(crate) nts_data: Box<ntp_proto::SourceNtsData>,
+    /// Client-to-server cipher for encrypting NTP requests.
+    pub(crate) c2s: Box<dyn Cipher>,
+
+    /// Server-to-client cipher for decrypting NTP responses.
+    pub(crate) s2c: Box<dyn Cipher>,
 
     /// TLS certificate information (optional, for diagnostics)
     pub certificate: Option<CertificateInfo>,
 }
 
+// Manual Debug impl since Box<dyn Cipher> doesn't implement Debug
+impl std::fmt::Debug for NtsKeResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NtsKeResult")
+            .field("ntp_server", &self.ntp_server)
+            .field("aead_algorithm", &self.aead_algorithm)
+            .field("cookies", &format!("[{} cookies]", self.cookies.len()))
+            .field("ke_duration", &self.ke_duration)
+            .field("c2s", &"<cipher>")
+            .field("s2c", &"<cipher>")
+            .field("certificate", &self.certificate)
+            .finish()
+    }
+}
+
 impl NtsKeResult {
-    /// Create a new NtsKeResult from ntp-proto's KeyExchangeResult.
+    /// Create a new NtsKeResult from NTS-KE negotiated parameters.
     pub(crate) fn new(
         ntp_server: std::net::SocketAddr,
         aead_algorithm: String,
         cookies: Vec<Vec<u8>>,
         ke_duration: std::time::Duration,
-        nts_data: Box<ntp_proto::SourceNtsData>,
+        c2s: Box<dyn Cipher>,
+        s2c: Box<dyn Cipher>,
         certificate: Option<CertificateInfo>,
     ) -> Self {
         Self {
@@ -126,7 +146,8 @@ impl NtsKeResult {
             aead_algorithm,
             cookies,
             ke_duration,
-            nts_data,
+            c2s,
+            s2c,
             certificate,
         }
     }
@@ -162,6 +183,14 @@ impl NtsKeResult {
     /// output or logging.
     pub fn cookies_ref(&self) -> Vec<&[u8]> {
         self.cookies.iter().map(|c| c.as_slice()).collect()
+    }
+
+    /// Extract NTS state for authenticated NTP queries.
+    ///
+    /// This consumes the NtsKeResult and creates an NtsState that can be
+    /// used for creating authenticated NTP requests and verifying responses.
+    pub(crate) fn into_nts_state(self) -> crate::nts_ntp::NtsState {
+        crate::nts_ntp::NtsState::new(self.c2s, self.s2c, self.cookies)
     }
 }
 

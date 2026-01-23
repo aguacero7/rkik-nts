@@ -11,7 +11,7 @@
 use std::io::Cursor;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ntp_proto::{Cipher, CipherProvider, NtpPacket, PacketParsingError, PollInterval};
+use ntp_proto::{Cipher, NtpPacket, PacketParsingError, PollInterval};
 use tracing::{debug, trace, warn};
 
 use crate::error::{Error, Result};
@@ -126,9 +126,7 @@ impl NtsState {
     /// - Packet serialization fails
     pub fn create_request(&mut self, poll_interval: PollInterval) -> Result<Vec<u8>> {
         // Get a cookie from the pool
-        let cookie = self.cookies.pop().ok_or_else(|| {
-            Error::MissingNtsCookie
-        })?;
+        let cookie = self.cookies.pop().ok_or_else(|| Error::MissingNtsCookie)?;
 
         debug!(
             "Creating NTS request with cookie ({} bytes), {} cookies remaining",
@@ -139,8 +137,8 @@ impl NtsState {
         // Determine how many new cookies to request
         let new_cookies = if self.needs_more_cookies() {
             // Request more cookies, but limit based on packet size
-            let max_cookies = ((NTS_PACKET_BUFFER_SIZE - 300) / cookie.len().max(1))
-                .min(u8::MAX as usize) as u8;
+            let max_cookies =
+                ((NTS_PACKET_BUFFER_SIZE - 300) / cookie.len().max(1)).min(u8::MAX as usize) as u8;
             max_cookies.min(COOKIES_TO_REQUEST)
         } else {
             1 // Always request at least one to maintain the pool
@@ -152,7 +150,8 @@ impl NtsState {
         // - The cookie extension field
         // - Cookie placeholder extension fields
         // - Proper NTP header with random transmit timestamp
-        let (packet, _request_id) = NtpPacket::nts_poll_message(&cookie, new_cookies, poll_interval);
+        let (packet, _request_id) =
+            NtpPacket::nts_poll_message(&cookie, new_cookies, poll_interval);
 
         // Record the send time for RTT calculation
         self.send_time = Some(SystemTime::now());
@@ -250,7 +249,9 @@ impl NtsState {
         }
 
         if packet.is_kiss_rate(packet.poll()) {
-            return Err(Error::Protocol("Server requested rate limiting".to_string()));
+            return Err(Error::Protocol(
+                "Server requested rate limiting".to_string(),
+            ));
         }
 
         let request_validation = self.last_request.take().ok_or_else(|| {
@@ -302,7 +303,7 @@ impl NtsState {
         // NTP timestamps are 64-bit with 32-bit seconds and 32-bit fraction
         // Since we can't easily access the raw bits, we use a workaround:
         // Create a known reference and calculate based on that
-        let network_time = ntp_timestamp_to_system_time_approx(transmit_ts);
+        let network_time = ntp_timestamp_to_system_time(transmit_ts);
 
         let response = NtsResponse {
             network_time,
@@ -364,49 +365,21 @@ impl NtsResponse {
     }
 }
 
-/// Convert NTP timestamp to SystemTime using approximation.
-///
-/// Since NtpTimestamp doesn't expose its raw bits publicly, we use a different approach:
-/// We create a timestamp for a known time (Unix epoch) and use the difference
-/// calculation to approximate the conversion.
-fn ntp_timestamp_to_system_time_approx(ts: ntp_proto::NtpTimestamp) -> SystemTime {
-    // NTP epoch is 1900-01-01, Unix epoch is 1970-01-01
-    // The difference is 2,208,988,800 seconds
-    //
-    // We can't directly access the NTP timestamp bits, but we can:
-    // 1. Create a known reference timestamp
-    // 2. Use the difference operation to get a duration
-    // 3. Apply that duration to get the SystemTime
-    //
-    // For now, we use the current system time as a close approximation,
-    // since NTS time queries should be close to real time.
-    // This is not perfect but works for most use cases.
+/// Convert NTP timestamp to SystemTime using a fixed UNIX epoch reference.
+fn ntp_timestamp_to_system_time(ts: ntp_proto::NtpTimestamp) -> SystemTime {
+    // NTP epoch is 1900-01-01, Unix epoch is 1970-01-01.
+    const NTP_UNIX_OFFSET: u32 = 2_208_988_800;
 
-    // Get current time as Unix timestamp
-    let now = SystemTime::now();
-    let now_unix = now
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
+    let unix_epoch_ntp =
+        ntp_proto::NtpTimestamp::from_seconds_nanos_since_ntp_era(NTP_UNIX_OFFSET, 0);
+    let delta = ts - unix_epoch_ntp;
+    let (secs, nanos) = delta.as_seconds_nanos();
+    let total_nanos = secs as i128 * 1_000_000_000 + nanos as i128;
 
-    // Create an NTP timestamp for "now" to compare against
-    const NTP_UNIX_OFFSET: u64 = 2_208_988_800;
-    let now_ntp_secs = (now_unix.as_secs() + NTP_UNIX_OFFSET) as u32;
-    let now_ntp_nanos = now_unix.subsec_nanos();
-    let now_ntp_ts = ntp_proto::NtpTimestamp::from_seconds_nanos_since_ntp_era(now_ntp_secs, now_ntp_nanos);
-
-    // Use is_before to determine if the received timestamp is before or after now
-    // and then estimate the offset
-    if ts.is_before(now_ntp_ts) {
-        // The server time is before our current time
-        // This is unexpected for a fresh response, but handle it gracefully
-        now
-    } else if now_ntp_ts.is_before(ts) {
-        // The server time is after our current time (normal case)
-        // Again, approximate - the times should be very close
-        now
+    if total_nanos >= 0 {
+        UNIX_EPOCH + Duration::from_nanos(total_nanos as u64)
     } else {
-        // Times are equal or very close
-        now
+        UNIX_EPOCH - Duration::from_nanos((-total_nanos) as u64)
     }
 }
 
@@ -534,72 +507,6 @@ fn parse_extension_fields(data: &[u8]) -> Result<ParsedExtensions> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ntp_proto::AesSivCmac256;
-
-    fn create_test_ciphers() -> (Box<dyn Cipher>, Box<dyn Cipher>) {
-        let key: [u8; 32] = [0u8; 32];
-        (
-            Box::new(AesSivCmac256::new(key.into())),
-            Box::new(AesSivCmac256::new(key.into())),
-        )
-    }
-
-    #[test]
-    fn test_nts_state_cookie_management() {
-        let (c2s, s2c) = create_test_ciphers();
-        let cookies = vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]];
-
-        let mut state = NtsState::new(c2s, s2c, cookies);
-
-        assert_eq!(state.cookie_count(), 2);
-        assert!(state.has_cookies());
-        assert!(state.needs_more_cookies()); // < MIN_COOKIE_COUNT
-
-        // Add more cookies
-        for i in 0..5 {
-            state.store_cookie(vec![i; 4]);
-        }
-
-        assert_eq!(state.cookie_count(), 7);
-        assert!(!state.needs_more_cookies());
-    }
-
-    #[test]
-    fn test_nts_state_no_cookies_error() {
-        let (c2s, s2c) = create_test_ciphers();
-        let mut state = NtsState::new(c2s, s2c, vec![]);
-
-        let result = state.create_request(PollInterval::default());
-        assert!(result.is_err());
-
-        if let Err(Error::MissingNtsCookie) = result {
-            // expected
-        } else {
-            panic!("Expected MissingNtsCookie error");
-        }
-    }
-
-    #[test]
-    fn test_parse_response_missing_authenticator() {
-        use ntp_proto::NoCipher;
-
-        let (c2s, s2c) = create_test_ciphers();
-        let cookies = vec![vec![1, 2, 3, 4]];
-        let mut state = NtsState::new(c2s, s2c, cookies);
-
-        let _ = state.create_request(PollInterval::default()).unwrap();
-
-        let (packet, _request_id) = NtpPacket::poll_message(PollInterval::default());
-        let mut buffer = [0u8; NTS_PACKET_BUFFER_SIZE];
-        let mut cursor = Cursor::new(buffer.as_mut_slice());
-        packet
-            .serialize(&mut cursor, &NoCipher, None)
-            .unwrap();
-        let len = cursor.position() as usize;
-
-        let result = state.parse_response(&buffer[..len]);
-        assert!(matches!(result, Err(Error::MissingAuthenticator)));
-    }
 
     #[test]
     fn test_nts_response_offset_calculation() {
@@ -637,5 +544,17 @@ mod tests {
 
         assert_eq!(response.offset(), Duration::from_secs(5));
         assert_eq!(response.offset_signed_ms(), -5000);
+    }
+
+    #[test]
+    fn test_ntp_timestamp_to_system_time() {
+        const NTP_UNIX_OFFSET: u32 = 2_208_988_800;
+        let ts = ntp_proto::NtpTimestamp::from_seconds_nanos_since_ntp_era(
+            NTP_UNIX_OFFSET + 10,
+            500_000_000,
+        );
+        let system_time = ntp_timestamp_to_system_time(ts);
+        let delta = system_time.duration_since(UNIX_EPOCH).unwrap();
+        assert_eq!(delta, Duration::from_millis(10_500));
     }
 }

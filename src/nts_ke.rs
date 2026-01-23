@@ -66,7 +66,10 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     };
 
     if let Some(ref cert) = certificate {
-        debug!("Captured certificate: subject={}, issuer={}", cert.subject, cert.issuer);
+        debug!(
+            "Captured certificate: subject={}, issuer={}",
+            cert.subject, cert.issuer
+        );
     }
 
     // Convert KeyExchangeResult to NtsKeResult
@@ -302,8 +305,7 @@ fn build_tls_config(
         let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
-        let platform_verifier = tls_utils::PlatformVerifier::new()
-            .with_provider(provider);
+        let platform_verifier = tls_utils::PlatformVerifier::new().with_provider(provider);
 
         // Wrap with capturing verifier
         let capturing_verifier = CapturingVerifier {

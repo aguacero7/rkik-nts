@@ -161,9 +161,13 @@ impl NtsState {
         let mut cursor = Cursor::new(buffer.as_mut_slice());
 
         // Use the c2s cipher for encryption
-        packet
-            .serialize(&mut cursor, &*self.c2s, None)
-            .map_err(|e| Error::Protocol(format!("Failed to serialize NTS packet: {}", e)))?;
+        if let Err(e) = packet.serialize(&mut cursor, &*self.c2s, None) {
+            self.cookies.push(cookie);
+            return Err(Error::Protocol(format!(
+                "Failed to serialize NTS packet: {}",
+                e
+            )));
+        }
 
         let len = cursor.position() as usize;
         let result = buffer[..len].to_vec();

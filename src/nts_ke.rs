@@ -445,8 +445,11 @@ fn convert_ke_result(
 
     debug!("Extracted NTS ciphers for authenticated NTP");
 
-    // Use "AEAD_AES_SIV_CMAC_256" as default since it's the most common negotiated algorithm
-    let aead_algorithm = "AEAD_AES_SIV_CMAC_256".to_string();
+    let aead_algorithm = match c2s.key_bytes().len() {
+        32 => "AEAD_AES_SIV_CMAC_256".to_string(),
+        64 => "AEAD_AES_SIV_CMAC_512".to_string(),
+        other => format!("UNKNOWN_KEY_LEN_{}", other),
+    };
 
     Ok(NtsKeResult::new(
         ntp_server,

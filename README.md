@@ -24,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rkik-nts = "0.3"
+rkik-nts = "0.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -59,6 +59,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```bash
 cargo run --example simple_client --features tracing-subscriber
+```
+
+### End-to-End NTS Validation
+
+```bash
+cargo run --example nts_end_to_end --features tracing-subscriber
 ```
 
 ### Certificate Information (New in v0.3.0)

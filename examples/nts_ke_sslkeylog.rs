@@ -54,8 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("{}\n", "=".repeat(60));
 
     // Configure NTS client
-    let config = NtsClientConfig::new(server)
-        .with_timeout(Duration::from_secs(10));
+    let config = NtsClientConfig::new(server).with_timeout(Duration::from_secs(10));
 
     let mut client = NtsClient::new(config);
 
@@ -70,7 +69,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("  Serveur NTP :     {}", ke_info.ntp_server);
                 println!("  Algorithme AEAD : {}", ke_info.aead_algorithm);
                 println!("  Durée KE :        {:?}", ke_info.ke_duration());
-                println!("  Cookies :         {} (taille: {:?} bytes)",
+                println!(
+                    "  Cookies :         {} (taille: {:?} bytes)",
                     ke_info.cookie_count(),
                     ke_info.cookie_sizes()
                 );

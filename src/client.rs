@@ -205,7 +205,10 @@ impl NtsClient {
             return Err(Error::MissingNtsCookie);
         }
 
-        debug!("Creating NTS-authenticated NTP request ({} cookies available)", nts_state.cookie_count());
+        debug!(
+            "Creating NTS-authenticated NTP request ({} cookies available)",
+            nts_state.cookie_count()
+        );
 
         // Create NTS-authenticated NTP request
         let poll_interval = PollInterval::default();

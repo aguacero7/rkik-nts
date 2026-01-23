@@ -1,6 +1,6 @@
 [package]
 name = "rkik-nts"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.70"
 authors = ["Aguacero7 <naps@teamnaps.fr>"]
@@ -67,4 +67,9 @@ required-features = ["tracing-subscriber"]
 [[example]]
 name = "test_certificate"
 path = "examples/test_certificate.rs"
+required-features = ["tracing-subscriber"]
+
+[[example]]
+name = "nts_end_to_end"
+path = "examples/nts_end_to_end.rs"
 required-features = ["tracing-subscriber"]

@@ -12,7 +12,7 @@ This document provides guidance on integrating `rkik-nts` with the rkik project.
 
 ```toml
 [dependencies]
-rkik-nts = "0.3"
+rkik-nts = "0.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -203,6 +203,11 @@ match client.get_time().await {
     Err(Error::Timeout) => { /* handle timeout */ },
     Err(Error::ServerUnavailable(_)) => { /* handle unreachable server */ },
     Err(Error::KeyExchange(_)) => { /* handle NTS-KE failure */ },
+    Err(Error::MissingNtsCookie) => { /* reconnect and retry */ },
+    Err(Error::MissingAuthenticator) => { /* reject unauthenticated response */ },
+    Err(Error::AeadVerificationFailed(_)) => { /* treat as spoofed or tampered */ },
+    Err(Error::MalformedNtsExtension(_)) => { /* reject malformed packet */ },
+    Err(Error::NoCookiesReturned) => { /* re-run NTS-KE to refresh cookies */ },
     Err(e) => { /* handle other errors */ },
 }
 ```

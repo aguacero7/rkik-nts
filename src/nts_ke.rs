@@ -66,7 +66,10 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     };
 
     if let Some(ref cert) = certificate {
-        debug!("Captured certificate: subject={}, issuer={}", cert.subject, cert.issuer);
+        debug!(
+            "Captured certificate: subject={}, issuer={}",
+            cert.subject, cert.issuer
+        );
     }
 
     // Convert KeyExchangeResult to NtsKeResult
@@ -275,7 +278,7 @@ fn build_tls_config(
     ntp_proto::tls_utils::ClientConfig,
     Arc<Mutex<Vec<CertificateDer<'static>>>>,
 )> {
-    use ntp_proto::tls_utils::{self, Certificate};
+    use ntp_proto::tls_utils::{self};
 
     // Ensure a default crypto provider is installed
     // This is safe to call multiple times - it will only install once
@@ -302,8 +305,7 @@ fn build_tls_config(
         let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
         let provider = builder.crypto_provider().clone();
 
-        let platform_verifier = tls_utils::PlatformVerifier::new()
-            .with_provider(provider);
+        let platform_verifier = tls_utils::PlatformVerifier::new().with_provider(provider);
 
         // Wrap with capturing verifier
         let capturing_verifier = CapturingVerifier {
@@ -435,16 +437,27 @@ fn convert_ke_result(
         cookies.push(cookie);
     }
 
-    // Get a reference to the cipher to determine the algorithm
-    // We use "AEAD_AES_SIV_CMAC_256" as default since it's the most common
-    let aead_algorithm = "AEAD_AES_SIV_CMAC_256".to_string();
+    debug!("Extracted {} cookies from NTS-KE", cookies.len());
+
+    // Extract the ciphers from SourceNtsData using get_keys()
+    // This consumes the SourceNtsData and returns (c2s, s2c) ciphers
+    let (c2s, s2c) = result.nts.get_keys();
+
+    debug!("Extracted NTS ciphers for authenticated NTP");
+
+    let aead_algorithm = match c2s.key_bytes().len() {
+        32 => "AEAD_AES_SIV_CMAC_256".to_string(),
+        64 => "AEAD_AES_SIV_CMAC_512".to_string(),
+        other => format!("UNKNOWN_KEY_LEN_{}", other),
+    };
 
     Ok(NtsKeResult::new(
         ntp_server,
         aead_algorithm,
         cookies,
         ke_duration,
-        result.nts,
+        c2s,
+        s2c,
         certificate,
     ))
 }

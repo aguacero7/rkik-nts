@@ -45,6 +45,26 @@ pub enum Error {
     #[error("Authentication failed: {0}")]
     AuthenticationFailed(String),
 
+    /// Missing NTS cookie.
+    #[error("Missing NTS cookie")]
+    MissingNtsCookie,
+
+    /// Missing NTS authenticator.
+    #[error("Missing NTS authenticator")]
+    MissingAuthenticator,
+
+    /// AEAD verification failed.
+    #[error("AEAD verification failed: {0}")]
+    AeadVerificationFailed(String),
+
+    /// Malformed NTS extension fields.
+    #[error("Malformed NTS extension fields: {0}")]
+    MalformedNtsExtension(String),
+
+    /// No cookies returned when requested.
+    #[error("No NTS cookies returned by server")]
+    NoCookiesReturned,
+
     /// Generic error.
     #[error("{0}")]
     Other(String),
@@ -70,6 +90,21 @@ mod tests {
 
         let err = Error::ServerUnavailable("server down".to_string());
         assert_eq!(err.to_string(), "Server unreachable: server down");
+
+        let err = Error::MissingNtsCookie;
+        assert_eq!(err.to_string(), "Missing NTS cookie");
+
+        let err = Error::MissingAuthenticator;
+        assert_eq!(err.to_string(), "Missing NTS authenticator");
+
+        let err = Error::AeadVerificationFailed("bad tag".to_string());
+        assert_eq!(err.to_string(), "AEAD verification failed: bad tag");
+
+        let err = Error::MalformedNtsExtension("bad field".to_string());
+        assert_eq!(err.to_string(), "Malformed NTS extension fields: bad field");
+
+        let err = Error::NoCookiesReturned;
+        assert_eq!(err.to_string(), "No NTS cookies returned by server");
     }
 
     #[test]

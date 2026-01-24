@@ -68,11 +68,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("Informations NTS-KE :");
                 println!("  Serveur NTP :     {}", ke_info.ntp_server);
                 println!("  Algorithme AEAD : {}", ke_info.aead_algorithm);
-                println!("  Durée KE :        {:?}", ke_info.ke_duration());
+                println!("  Durée KE :        {:?}", ke_info.ke_duration);
                 println!(
-                    "  Cookies :         {} (taille: {:?} bytes)",
-                    ke_info.cookie_count(),
-                    ke_info.cookie_sizes()
+                    "  Cookies :         {}",
+                    ke_info.initial_cookie_count
                 );
             }
         }

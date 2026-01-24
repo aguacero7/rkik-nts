@@ -117,6 +117,8 @@ client.connect().await?;
 let time = client.get_time().await?;
 ```
 
+Note: retry logic is not automatic; `max_retries` is currently a reserved configuration value.
+
 See the [examples/](examples/) directory for more detailed examples.
 
 ## Advanced Features

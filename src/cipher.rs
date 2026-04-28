@@ -4,6 +4,7 @@
 //! AES-SIV-CMAC-512 as defined in RFC 5297 and required by RFC 8915.
 
 use aes_siv::{KeyInit, siv::Aes128Siv, siv::Aes256Siv};
+use zeroize::Zeroize;
 
 use crate::error::{Error, Result};
 
@@ -146,8 +147,8 @@ impl std::fmt::Debug for AeadCipher {
 impl Drop for AeadCipher {
     fn drop(&mut self) {
         match self {
-            AeadCipher::SivCmac256(key) => key.iter_mut().for_each(|b| *b = 0),
-            AeadCipher::SivCmac512(key) => key.iter_mut().for_each(|b| *b = 0),
+            AeadCipher::SivCmac256(key) => key.zeroize(),
+            AeadCipher::SivCmac512(key) => key.zeroize(),
         }
     }
 }

@@ -29,6 +29,10 @@ pub enum Error {
     #[error("Invalid server response: {0}")]
     InvalidResponse(String),
 
+    /// Server returned a Kiss-o'-Death response.
+    #[error("Server sent Kiss-o'-Death packet: {0}")]
+    KissOfDeath(String),
+
     /// Timeout occurred during operation.
     #[error("Operation timed out")]
     Timeout,

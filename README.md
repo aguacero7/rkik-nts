@@ -11,7 +11,7 @@ This library provides a simple, safe, and ergonomic API for querying time from N
 
 - **Secure**: Full NTS (Network Time Security) support for authenticated time queries
 - **Certificate Diagnostics**: TLS certificate information capture for security auditing and diagnostics
-- **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis
+- **TLS Debugging**: optional `tls-keylog` feature for Wireshark traffic analysis
 - **Simple API**: Easy-to-use client interface with sensible defaults
 - **Async**: Built on Tokio for efficient async I/O
 - **Configurable**: Flexible configuration options for advanced use cases
@@ -117,7 +117,8 @@ client.connect().await?;
 let time = client.get_time().await?;
 ```
 
-Note: retry logic is not automatic; `max_retries` is currently a reserved configuration value.
+`max_retries` controls how many additional authenticated query attempts are made
+after transport or packet-validation failures before `get_time()` returns an error.
 
 See the [examples/](examples/) directory for more detailed examples.
 
@@ -125,20 +126,22 @@ See the [examples/](examples/) directory for more detailed examples.
 
 ### TLS Traffic Analysis with SSLKEYLOGFILE
 
-For debugging and network analysis, you can capture TLS session keys for Wireshark decryption:
+For debugging and network analysis, you can capture TLS session keys for Wireshark decryption.
+This is disabled by default and requires the `tls-keylog` feature:
 
 ```bash
 # Set environment variable to enable keylog
 export SSLKEYLOGFILE=/tmp/sslkeylog.txt
 
 # Run your application or example
-cargo run --example test_certificate --features tracing-subscriber
+cargo run --example test_certificate --features "tracing-subscriber tls-keylog"
 
 # Use the keylog file in Wireshark:
 # Edit → Preferences → Protocols → TLS → (Pre)-Master-Secret log filename
 ```
 
-This allows you to decrypt and analyze the NTS-KE TLS traffic in Wireshark for troubleshooting.
+Do not enable this in production. The exported TLS secrets also expose the
+derived NTS keys for that session.
 
 ## Public NTS Servers
 

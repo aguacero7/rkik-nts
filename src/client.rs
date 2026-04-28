@@ -53,8 +53,10 @@ pub struct NtsClient {
     nts_state: Option<NtsState>,
     /// UDP socket for NTP queries.
     socket: Option<UdpSocket>,
-    /// NTP server address from NTS-KE.
+    /// Primary NTP server address from NTS-KE.
     ntp_server: Option<SocketAddr>,
+    /// All resolved NTP server addresses from NTS-KE.
+    ntp_servers: Vec<SocketAddr>,
     /// NTS-KE diagnostic information.
     ke_info: Option<NtsKeInfo>,
 }
@@ -86,6 +88,7 @@ impl NtsClient {
             nts_state: None,
             socket: None,
             ntp_server: None,
+            ntp_servers: Vec::new(),
             ke_info: None,
         }
     }
@@ -112,6 +115,7 @@ impl NtsClient {
         let nts_result = perform_nts_ke(&self.config).await?;
 
         let ntp_server = nts_result.ntp_server;
+        let ntp_servers = nts_result.ntp_server_addrs.clone();
         let aead_algorithm = nts_result.aead_algorithm.clone();
         let ke_duration = nts_result.ke_duration();
         let certificate = nts_result.certificate.clone();
@@ -124,12 +128,14 @@ impl NtsClient {
 
         // Create UDP socket for NTP queries
         // Choose bind address based on server's address family
-        let bind_addr = if ntp_server.is_ipv6() {
-            "[::]:0"
+        let socket = if ntp_servers.iter().any(SocketAddr::is_ipv6) {
+            match UdpSocket::bind("[::]:0").await {
+                Ok(socket) => socket,
+                Err(_) => UdpSocket::bind("0.0.0.0:0").await?,
+            }
         } else {
-            "0.0.0.0:0"
+            UdpSocket::bind("0.0.0.0:0").await?
         };
-        let socket = UdpSocket::bind(bind_addr).await?;
 
         // Extract NTS state for authenticated queries
         let nts_state = nts_result.into_nts_state();
@@ -137,6 +143,7 @@ impl NtsClient {
         self.socket = Some(socket);
         self.nts_state = Some(nts_state);
         self.ntp_server = Some(ntp_server);
+        self.ntp_servers = ntp_servers;
         self.ke_info = Some(NtsKeInfo {
             ntp_server,
             aead_algorithm,
@@ -197,6 +204,11 @@ impl NtsClient {
         let ntp_server = self.ntp_server.ok_or_else(|| {
             Error::Other("No NTP server configured. Call connect() first.".to_string())
         })?;
+        if self.ntp_servers.is_empty() {
+            return Err(Error::Other(
+                "No NTP server addresses resolved. Call connect() first.".to_string(),
+            ));
+        }
 
         // Check if we have cookies available
         if !nts_state.has_cookies() {
@@ -208,27 +220,92 @@ impl NtsClient {
             nts_state.cookie_count()
         );
 
-        // Create NTS-authenticated NTP request
-        let request = nts_state.create_request()?;
+        let mut last_error = None;
+        let max_attempts = self
+            .config
+            .max_retries
+            .saturating_add(1)
+            .max(self.ntp_servers.len() as u32);
+        let mut nts_response = None;
 
-        // Send request using stored socket
-        debug!("Sending NTS request ({} bytes) to {}", request.len(), ntp_server);
-        socket.send_to(&request, ntp_server).await?;
+        for attempt in 0..max_attempts {
+            let request = nts_state.create_request()?;
+            let target = self.ntp_servers[attempt as usize % self.ntp_servers.len()];
 
-        // Receive response with timeout.
-        // Use recv_from instead of recv so that responses from anycast
-        // services (e.g. Cloudflare) are accepted regardless of source IP.
-        let mut buf = vec![0u8; 1024];
-        let (len, src) = timeout(self.config.timeout, socket.recv_from(&mut buf))
-            .await
-            .map_err(|_| Error::Timeout)??;
-        debug!("Received {} bytes from {}", len, src);
+            debug!(
+                "Sending NTS request attempt {} ({} bytes) to {}",
+                attempt + 1,
+                request.len(),
+                target
+            );
 
-        buf.truncate(len);
+            if let Err(err) = socket.send_to(&request, target).await {
+                nts_state.abandon_request();
+                last_error = Some(Error::Io(err));
+                continue;
+            }
 
-        // Parse and verify response (AEAD verification happens here)
-        debug!("Received {} bytes, verifying NTS response", len);
-        let nts_response = nts_state.parse_response(&buf)?;
+            let deadline = tokio::time::Instant::now() + self.config.timeout;
+            let mut buf = vec![0u8; 2048];
+            let mut attempt_error = Error::Timeout;
+
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                let (len, src) = match timeout(remaining, socket.recv_from(&mut buf)).await {
+                    Ok(Ok(v)) => v,
+                    Ok(Err(err)) => {
+                        attempt_error = Error::Io(err);
+                        break;
+                    }
+                    Err(_) => break,
+                };
+
+                if src.port() != target.port() {
+                    debug!("Discarding UDP packet from unexpected source port {}", src);
+                    continue;
+                }
+
+                debug!("Received {} bytes from {}", len, src);
+                let packet = &buf[..len];
+                match nts_state.parse_response(packet) {
+                    Ok(response) => {
+                        nts_response = Some(response);
+                        break;
+                    }
+                    Err(
+                        err @ Error::InvalidResponse(_)
+                        | err @ Error::MissingAuthenticator
+                        | err @ Error::AeadVerificationFailed(_)
+                        | err @ Error::MalformedNtsExtension(_)
+                        | err @ Error::KissOfDeath(_),
+                    ) => {
+                        debug!("Discarding invalid NTS response from {}: {}", src, err);
+                        attempt_error = err;
+                        continue;
+                    }
+                    Err(err) => {
+                        attempt_error = err;
+                        break;
+                    }
+                }
+            }
+
+            if nts_response.is_some() {
+                break;
+            }
+
+            nts_state.abandon_request();
+            last_error = Some(attempt_error);
+        }
+
+        let nts_response = match nts_response {
+            Some(response) => response,
+            None => return Err(last_error.unwrap_or(Error::Timeout)),
+        };
 
         debug!(
             "NTS response verified. Stratum: {}, authenticated: {}, cookies remaining: {}",
@@ -314,6 +391,7 @@ impl NtsClient {
         self.socket = None;
         self.nts_state = None;
         self.ntp_server = None;
+        self.ntp_servers.clear();
         self.ke_info = None;
         self.connect().await
     }

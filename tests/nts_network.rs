@@ -19,6 +19,16 @@ fn init_tracing() {
 
 fn is_transient_network_error(err: &Error) -> bool {
     matches!(err, Error::Timeout | Error::ServerUnavailable(_))
+        || matches!(
+            err,
+            Error::Io(io_err)
+                if matches!(
+                    io_err.kind(),
+                    std::io::ErrorKind::NetworkUnreachable
+                        | std::io::ErrorKind::AddrNotAvailable
+                        | std::io::ErrorKind::HostUnreachable
+                )
+        )
 }
 
 #[tokio::test]

@@ -52,8 +52,9 @@ pub struct TimeSnapshot {
     /// The network time received from the NTP server.
     pub network_time: SystemTime,
 
-    /// The offset between system time and network time.
-    /// Positive means the system clock is ahead.
+    /// The absolute offset between system time and network time.
+    ///
+    /// Use [`TimeSnapshot::offset_signed`] to recover the signed direction.
     pub offset: std::time::Duration,
 
     /// Round-trip delay to the server.
@@ -96,6 +97,9 @@ pub struct NtsKeResult {
     /// The NTP server to use for time queries.
     pub ntp_server: std::net::SocketAddr,
 
+    /// All resolved NTP server addresses to try for time queries.
+    pub(crate) ntp_server_addrs: Vec<std::net::SocketAddr>,
+
     /// The negotiated AEAD algorithm.
     pub aead_algorithm: String,
 
@@ -120,6 +124,7 @@ impl std::fmt::Debug for NtsKeResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NtsKeResult")
             .field("ntp_server", &self.ntp_server)
+            .field("ntp_server_addrs", &self.ntp_server_addrs)
             .field("aead_algorithm", &self.aead_algorithm)
             .field("cookies", &format!("[{} cookies]", self.cookies.len()))
             .field("ke_duration", &self.ke_duration)
@@ -131,27 +136,6 @@ impl std::fmt::Debug for NtsKeResult {
 }
 
 impl NtsKeResult {
-    /// Create a new NtsKeResult from NTS-KE negotiated parameters.
-    pub(crate) fn new(
-        ntp_server: std::net::SocketAddr,
-        aead_algorithm: String,
-        cookies: Vec<Vec<u8>>,
-        ke_duration: std::time::Duration,
-        c2s: AeadCipher,
-        s2c: AeadCipher,
-        certificate: Option<CertificateInfo>,
-    ) -> Self {
-        Self {
-            ntp_server,
-            aead_algorithm,
-            cookies,
-            ke_duration,
-            c2s,
-            s2c,
-            certificate,
-        }
-    }
-
     /// Get the number of available cookies.
     pub fn cookie_count(&self) -> usize {
         self.cookies.len()
@@ -179,8 +163,8 @@ impl NtsKeResult {
 
     /// Get a reference to the cookies (for diagnostic purposes).
     ///
-    /// Returns cookie data as byte slices. Useful for verbose diagnostic
-    /// output or logging.
+    /// Returns cookie data as byte slices. These cookies are bearer state and
+    /// should never be logged or exposed in production telemetry.
     pub fn cookies_ref(&self) -> Vec<&[u8]> {
         self.cookies.iter().map(|c| c.as_slice()).collect()
     }

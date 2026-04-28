@@ -14,7 +14,7 @@
 //! - **Anti-Replay**: Unique identifiers prevent replay attacks
 //! - **Cookie Management**: Automatic cookie consumption and replenishment
 //! - **Certificate Diagnostics**: TLS certificate information capture for security auditing
-//! - **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis
+//! - **TLS Debugging**: optional `tls-keylog` feature for Wireshark traffic analysis
 //! - **Async/Await**: Built on Tokio for efficient async I/O
 //! - **Configurable**: Flexible configuration options for advanced use cases
 //! - **Self-contained RFC 8915 implementation**: NTS-KE and NTS-protected NTP implemented directly in this crate

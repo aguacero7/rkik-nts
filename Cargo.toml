@@ -26,6 +26,7 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 x509-parser = "0.18"
 sha2 = "0.10"
 chrono = "0.4"
+zeroize = "1.8"
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -36,6 +37,8 @@ default = []
 serde = ["dep:serde"]
 tracing-subscriber = ["dep:tracing-subscriber"]
 network-tests = []
+tls-keylog = []
+dangerous-configuration = []
 
 [lib]
 name = "rkik_nts"

@@ -19,18 +19,24 @@ pub struct NtsClientConfig {
     /// Timeout for network operations.
     pub timeout: Duration,
 
-    /// Maximum number of retry attempts for failed operations (currently unused).
+    /// Maximum number of retry attempts for time queries after transport or
+    /// validation failures.
     pub max_retries: u32,
 
     /// Whether to verify the server's TLS certificate.
+    ///
+    /// Disabling certificate verification is rejected unless the crate is
+    /// compiled with the `dangerous-configuration` feature.
     pub verify_tls_cert: bool,
 
-    /// Optional: Specific NTP server address to use after key exchange.
-    /// Currently unused; the NTP server from NTS-KE is always used.
+    /// Optional override for the NTP server address to use after key exchange.
+    ///
+    /// When set, this overrides the server/port negotiated by NTS-KE.
     pub ntp_server: Option<SocketAddr>,
 
-    /// NTP version to use (default: 4).
-    /// Currently unused; NTS is performed with NTPv4 only.
+    /// NTP version to use.
+    ///
+    /// Only NTPv4 is supported by this crate.
     pub ntp_version: u8,
 }
 
@@ -81,7 +87,7 @@ impl NtsClientConfig {
         self
     }
 
-    /// Set the maximum number of retries (currently unused).
+    /// Set the maximum number of retries for time queries.
     pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
@@ -99,7 +105,9 @@ impl NtsClientConfig {
         self
     }
 
-    /// Set the NTP version (currently unused; NTPv4 is always used).
+    /// Set the NTP version.
+    ///
+    /// Only version 4 is supported.
     pub fn with_ntp_version(mut self, version: u8) -> Self {
         self.ntp_version = version;
         self
@@ -113,9 +121,22 @@ impl NtsClientConfig {
             ));
         }
 
-        if self.ntp_version < 3 || self.ntp_version > 4 {
+        if self.timeout.is_zero() {
             return Err(crate::error::Error::InvalidConfig(
-                "NTP version must be 3 or 4".to_string(),
+                "timeout must be greater than zero".to_string(),
+            ));
+        }
+
+        if self.ntp_version != 4 {
+            return Err(crate::error::Error::InvalidConfig(
+                "only NTPv4 is supported".to_string(),
+            ));
+        }
+
+        if !self.verify_tls_cert && !cfg!(feature = "dangerous-configuration") {
+            return Err(crate::error::Error::InvalidConfig(
+                "TLS verification can only be disabled with the dangerous-configuration feature"
+                    .to_string(),
             ));
         }
 
@@ -168,7 +189,7 @@ mod tests {
     #[test]
     fn test_invalid_ntp_version() {
         let config = NtsClientConfig {
-            ntp_version: 2,
+            ntp_version: 3,
             ..Default::default()
         };
         assert!(config.validate().is_err());
@@ -182,9 +203,6 @@ mod tests {
 
     #[test]
     fn test_valid_ntp_versions() {
-        let config3 = NtsClientConfig::new("test.server.com").with_ntp_version(3);
-        assert!(config3.validate().is_ok());
-
         let config4 = NtsClientConfig::new("test.server.com").with_ntp_version(4);
         assert!(config4.validate().is_ok());
     }
@@ -193,5 +211,12 @@ mod tests {
     fn test_tls_verification_disable() {
         let config = NtsClientConfig::new("test.server.com").with_tls_verification(false);
         assert!(!config.verify_tls_cert);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_zero_timeout_is_invalid() {
+        let config = NtsClientConfig::new("test.server.com").with_timeout(Duration::ZERO);
+        assert!(config.validate().is_err());
     }
 }

@@ -8,10 +8,12 @@
 //! - Verification and decryption of incoming responses
 //! - Cookie management (consumption and replenishment)
 
+use std::collections::VecDeque;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
 use tracing::{debug, trace};
+use zeroize::Zeroize;
 
 use crate::cipher::AeadCipher;
 use crate::error::{Error, Result};
@@ -143,12 +145,28 @@ fn scan_response_fields(data: &[u8]) -> Result<(Option<usize>, Option<Vec<u8>>)>
             0x0104 if unique_id.is_none() => {
                 unique_id = Some(body.to_vec());
             }
+            0x0104 => {
+                return Err(Error::MalformedNtsExtension(
+                    "duplicate Unique Identifier extension field".to_string(),
+                ));
+            }
             0x0404 if auth_offset.is_none() => {
                 auth_offset = Some(offset);
+            }
+            0x0404 => {
+                return Err(Error::MalformedNtsExtension(
+                    "duplicate NTS authenticator extension field".to_string(),
+                ));
             }
             _ => {}
         }
         offset += length;
+    }
+
+    if offset != data.len() {
+        return Err(Error::MalformedNtsExtension(
+            "trailing bytes after final extension field".to_string(),
+        ));
     }
 
     Ok((auth_offset, unique_id))
@@ -193,11 +211,13 @@ pub struct NtsState {
     /// Server-to-client decryption key.
     s2c: AeadCipher,
     /// Pool of available cookies.
-    cookies: Vec<Vec<u8>>,
+    cookies: VecDeque<Vec<u8>>,
     /// Time when the last request was sent (for RTT calculation).
     send_time: Option<SystemTime>,
     /// Validation context for the last request.
     last_request: Option<RequestValidation>,
+    /// The last authenticated server transmit timestamp.
+    last_server_transmit: Option<[u8; 8]>,
 }
 
 impl std::fmt::Debug for NtsState {
@@ -215,7 +235,8 @@ impl std::fmt::Debug for NtsState {
 #[derive(Debug, Clone)]
 struct RequestValidation {
     expected_origin: [u8; 8],
-    unique_id: Vec<u8>,
+    unique_id: [u8; 32],
+    pending_cookie: Vec<u8>,
 }
 
 impl NtsState {
@@ -231,9 +252,10 @@ impl NtsState {
         Self {
             c2s,
             s2c,
-            cookies,
+            cookies: cookies.into(),
             send_time: None,
             last_request: None,
+            last_server_transmit: None,
         }
     }
 
@@ -255,7 +277,16 @@ impl NtsState {
     /// Add a new cookie to the pool.
     pub fn store_cookie(&mut self, cookie: Vec<u8>) {
         trace!("Storing new cookie ({} bytes)", cookie.len());
-        self.cookies.push(cookie);
+        self.cookies.push_back(cookie);
+    }
+
+    /// Restore the in-flight cookie after a transport failure.
+    pub fn abandon_request(&mut self) {
+        if let Some(mut req) = self.last_request.take() {
+            req.unique_id.zeroize();
+            self.cookies.push_front(req.pending_cookie);
+        }
+        self.send_time = None;
     }
 
     /// Build an NTS-authenticated NTPv4 request packet (RFC 8915 §5).
@@ -276,7 +307,7 @@ impl NtsState {
         if self.cookies.is_empty() {
             return Err(Error::MissingNtsCookie);
         }
-        let cookie = self.cookies.remove(0);
+        let cookie = self.cookies.pop_front().expect("checked is_empty above");
         let cookie_len = cookie.len();
 
         let mut unique_id = [0u8; 32];
@@ -310,8 +341,9 @@ impl NtsState {
 
         // EF: NTS Cookie Placeholder × N (RFC 8915 §5.4)
         let n_placeholders = MIN_COOKIE_COUNT.saturating_sub(self.cookies.len());
+        let placeholder = vec![0u8; cookie_len];
         for _ in 0..n_placeholders {
-            write_ef(&mut buf, 0x0304, &vec![0u8; cookie_len]);
+            write_ef(&mut buf, 0x0304, &placeholder);
         }
 
         // EF: NTS Authenticator (RFC 8915 §5.5)
@@ -322,7 +354,8 @@ impl NtsState {
         self.send_time = Some(t1);
         self.last_request = Some(RequestValidation {
             expected_origin: t1_ntp,
-            unique_id: unique_id.to_vec(),
+            unique_id,
+            pending_cookie: cookie,
         });
 
         trace!("NTS request: {} bytes, {} placeholders", buf.len(), n_placeholders);
@@ -358,14 +391,24 @@ impl NtsState {
         }
 
         let li = (data[0] >> 6) & 0x03;
+        let version = (data[0] >> 3) & 0x07;
         let mode = data[0] & 0x07;
         let stratum = data[1];
         let _precision = data[3] as i8;
 
+        if version != 4 {
+            return Err(Error::InvalidResponse(format!(
+                "expected NTP version 4, got {version}"
+            )));
+        }
         if li == 3 {
             return Err(Error::InvalidResponse(
                 "server reports unsynchronized clock (LI=3)".to_string(),
             ));
+        }
+        if stratum == 0 {
+            let kiss = String::from_utf8_lossy(&data[12..16]).to_string();
+            return Err(Error::KissOfDeath(kiss));
         }
         if mode != 4 {
             return Err(Error::InvalidResponse(format!(
@@ -394,7 +437,7 @@ impl NtsState {
                     "server did not echo Unique Identifier".to_string(),
                 ))
             }
-            Some(uid) if uid != req.unique_id => {
+            Some(uid) if uid.as_slice() != req.unique_id => {
                 return Err(Error::InvalidResponse(
                     "Unique Identifier mismatch".to_string(),
                 ))
@@ -433,6 +476,11 @@ impl NtsState {
             ));
         }
         let ciphertext = &body[ciphertext_offset..ciphertext_offset + ct_len];
+        if auth_off + auth_total != data.len() {
+            return Err(Error::MalformedNtsExtension(
+                "NTS authenticator must be the last extension field".to_string(),
+            ));
+        }
         let plaintext = self.s2c.decrypt_siv(&[ad, nonce], ciphertext)?;
 
         // Extract new cookies from the decrypted plaintext (type-0x0204 TLVs).
@@ -441,7 +489,9 @@ impl NtsState {
             let ef_type = u16::from_be_bytes([plaintext[pt], plaintext[pt + 1]]);
             let ef_len = u16::from_be_bytes([plaintext[pt + 2], plaintext[pt + 3]]) as usize;
             if ef_len < 4 || pt + ef_len > plaintext.len() {
-                break;
+                return Err(Error::MalformedNtsExtension(
+                    "authenticated extension field payload is malformed".to_string(),
+                ));
             }
             if ef_type == 0x0204 {
                 self.store_cookie(plaintext[pt + 4..pt + ef_len].to_vec());
@@ -449,13 +499,35 @@ impl NtsState {
             }
             pt += ef_len;
         }
+        if pt != plaintext.len() {
+            return Err(Error::MalformedNtsExtension(
+                "authenticated extension field payload has trailing bytes".to_string(),
+            ));
+        }
 
         let t1 = self.send_time.unwrap_or_else(SystemTime::now);
         let t2 = ntp_to_system_time(data[32..40].try_into().unwrap());
-        let t3 = ntp_to_system_time(data[40..48].try_into().unwrap());
+        let transmit_timestamp: [u8; 8] = data[40..48].try_into().unwrap();
+        if transmit_timestamp == [0u8; 8] {
+            return Err(Error::InvalidResponse(
+                "server transmit timestamp is zero".to_string(),
+            ));
+        }
+        if self.last_server_transmit == Some(transmit_timestamp) {
+            return Err(Error::InvalidResponse(
+                "duplicate server transmit timestamp".to_string(),
+            ));
+        }
+        let t3 = ntp_to_system_time(transmit_timestamp);
         let t4 = SystemTime::now();
 
         let (network_time, round_trip_delay) = compute_ntp_offset(t1, t2, t3, t4);
+        self.last_server_transmit = Some(transmit_timestamp);
+        if let Some(mut req) = self.last_request.take() {
+            req.unique_id.zeroize();
+            req.pending_cookie.zeroize();
+        }
+        self.send_time = None;
 
         debug!(
             "NTS response ok: stratum={}, cookies_now={}, rtt={:?}",
@@ -471,6 +543,18 @@ impl NtsState {
             stratum,
             authenticated: true,
         })
+    }
+}
+
+impl Drop for NtsState {
+    fn drop(&mut self) {
+        for cookie in &mut self.cookies {
+            cookie.zeroize();
+        }
+        if let Some(req) = self.last_request.as_mut() {
+            req.unique_id.zeroize();
+            req.pending_cookie.zeroize();
+        }
     }
 }
 
@@ -618,6 +702,15 @@ mod tests {
         assert!(matches!(state.create_request(), Err(crate::error::Error::MissingNtsCookie)));
     }
 
+    #[test]
+    fn test_abandon_request_restores_cookie() {
+        let mut state = make_test_state(vec![vec![0xAA; 40]]);
+        let _req = state.create_request().unwrap();
+        assert_eq!(state.cookie_count(), 0);
+        state.abandon_request();
+        assert_eq!(state.cookie_count(), 1);
+    }
+
     /// Build a minimal fake NTS server response for unit testing parse_response.
     ///
     /// Mirrors what a real NTS server would send back:
@@ -625,10 +718,22 @@ mod tests {
     /// - Unique Identifier echo (0x0104)
     /// - NTS Authenticator (0x0404) encrypted with s2c, plaintext = cookie TLVs
     fn fake_server_response(state: &NtsState, new_cookies: &[Vec<u8>]) -> Vec<u8> {
+        fake_server_response_with_timestamps(
+            state,
+            new_cookies,
+            system_time_to_ntp(SystemTime::now()),
+            system_time_to_ntp(SystemTime::now()),
+        )
+    }
+
+    fn fake_server_response_with_timestamps(
+        state: &NtsState,
+        new_cookies: &[Vec<u8>],
+        t2_ntp: [u8; 8],
+        t3_ntp: [u8; 8],
+    ) -> Vec<u8> {
         let req = state.last_request.as_ref().unwrap();
         let t1_ntp = req.expected_origin;
-        let t2_ntp = system_time_to_ntp(SystemTime::now());
-        let t3_ntp = system_time_to_ntp(SystemTime::now());
 
         let mut buf = vec![
             0x24,   // LI=0, VN=4, Mode=4 (server)
@@ -785,6 +890,51 @@ mod tests {
         resp[0] = 0xE4; // LI=3 (unsynchronized)
         assert!(matches!(
             state.parse_response(&resp),
+            Err(crate::error::Error::InvalidResponse(_))
+        ));
+    }
+
+    #[test]
+    fn test_reject_duplicate_unique_id_extension() {
+        let mut state = make_test_state(vec![vec![0u8; 40]]);
+        let _req = state.create_request().unwrap();
+        let mut resp = fake_server_response(&state, &[]);
+        let uid = state.last_request.as_ref().unwrap().unique_id;
+        write_ef(&mut resp, 0x0104, &uid);
+        assert!(matches!(
+            state.parse_response(&resp),
+            Err(crate::error::Error::MalformedNtsExtension(_))
+        ));
+    }
+
+    #[test]
+    fn test_reject_trailing_bytes_after_authenticator() {
+        let mut state = make_test_state(vec![vec![0u8; 40]]);
+        let _req = state.create_request().unwrap();
+        let mut resp = fake_server_response(&state, &[]);
+        resp.extend_from_slice(&[0, 1, 2, 3]);
+        assert!(matches!(
+            state.parse_response(&resp),
+            Err(crate::error::Error::MalformedNtsExtension(_))
+        ));
+    }
+
+    #[test]
+    fn test_reject_duplicate_server_transmit_timestamp() {
+        let mut state = make_test_state(vec![vec![0u8; 40], vec![1u8; 40]]);
+        let _req = state.create_request().unwrap();
+        let resp = fake_server_response(&state, &[vec![0x11; 40]]);
+        state.parse_response(&resp).unwrap();
+
+        let _req = state.create_request().unwrap();
+        let replay = fake_server_response_with_timestamps(
+            &state,
+            &[vec![0x22; 40]],
+            resp[32..40].try_into().unwrap(),
+            resp[40..48].try_into().unwrap(),
+        );
+        assert!(matches!(
+            state.parse_response(&replay),
             Err(crate::error::Error::InvalidResponse(_))
         ));
     }

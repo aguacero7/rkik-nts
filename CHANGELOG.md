@@ -23,6 +23,8 @@ All notable changes to this project will be documented in this file.
 - `ntp_server` configuration now overrides the negotiated NTP endpoint when explicit pinning is required
 - Restricted supported protocol version to NTPv4 only; unsupported configured versions now fail validation
 - Gated TLS key logging behind the explicit `tls-keylog` cargo feature instead of ambient `SSLKEYLOGFILE` activation alone
+- Changed crate author contact
+- Changed License for MIT
 
 ### Fixed
 - Public NTS queries now authenticate successfully against real servers such as `time.cloudflare.com` and `nts.ntp.se`

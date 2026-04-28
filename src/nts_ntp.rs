@@ -358,7 +358,11 @@ impl NtsState {
             pending_cookie: cookie,
         });
 
-        trace!("NTS request: {} bytes, {} placeholders", buf.len(), n_placeholders);
+        trace!(
+            "NTS request: {} bytes, {} placeholders",
+            buf.len(),
+            n_placeholders
+        );
         Ok(buf)
     }
 
@@ -620,8 +624,10 @@ mod tests {
     }
 
     fn make_test_state(cookies: Vec<Vec<u8>>) -> NtsState {
-        let c2s = AeadCipher::from_key_bytes(crate::cipher::AEAD_AES_SIV_CMAC_256, &[1u8; 32]).unwrap();
-        let s2c = AeadCipher::from_key_bytes(crate::cipher::AEAD_AES_SIV_CMAC_256, &[2u8; 32]).unwrap();
+        let c2s =
+            AeadCipher::from_key_bytes(crate::cipher::AEAD_AES_SIV_CMAC_256, &[1u8; 32]).unwrap();
+        let s2c =
+            AeadCipher::from_key_bytes(crate::cipher::AEAD_AES_SIV_CMAC_256, &[2u8; 32]).unwrap();
         NtsState::new(c2s, s2c, cookies)
     }
 
@@ -639,7 +645,10 @@ mod tests {
         while offset + 4 <= pkt.len() {
             let t = u16::from_be_bytes([pkt[offset], pkt[offset + 1]]);
             let l = u16::from_be_bytes([pkt[offset + 2], pkt[offset + 3]]) as usize;
-            assert!(l >= 4 && l % 4 == 0 && offset + l <= pkt.len(), "malformed EF at {offset}");
+            assert!(
+                l >= 4 && l % 4 == 0 && offset + l <= pkt.len(),
+                "malformed EF at {offset}"
+            );
             types.push(t);
             offset += l;
         }
@@ -654,7 +663,11 @@ mod tests {
         let mut state = make_test_state(cookies);
         assert_eq!(state.cookie_count(), 3);
         state.create_request().unwrap();
-        assert_eq!(state.cookie_count(), 2, "one cookie should have been consumed");
+        assert_eq!(
+            state.cookie_count(),
+            2,
+            "one cookie should have been consumed"
+        );
     }
 
     #[test]
@@ -693,13 +706,19 @@ mod tests {
             }
             offset += l;
         }
-        assert_eq!(placeholder_count, 2, "expected 2 placeholders, got {placeholder_count}");
+        assert_eq!(
+            placeholder_count, 2,
+            "expected 2 placeholders, got {placeholder_count}"
+        );
     }
 
     #[test]
     fn test_create_request_fails_without_cookies() {
         let mut state = make_test_state(vec![]);
-        assert!(matches!(state.create_request(), Err(crate::error::Error::MissingNtsCookie)));
+        assert!(matches!(
+            state.create_request(),
+            Err(crate::error::Error::MissingNtsCookie)
+        ));
     }
 
     #[test]
@@ -745,9 +764,9 @@ mod tests {
         buf.extend_from_slice(&[0u8; 4]); // root dispersion
         buf.extend_from_slice(b"GPS\0"); // reference ID
         buf.extend_from_slice(&[0u8; 8]); // reference timestamp
-        buf.extend_from_slice(&t1_ntp);   // origin = T1 echoed
-        buf.extend_from_slice(&t2_ntp);   // receive timestamp T2
-        buf.extend_from_slice(&t3_ntp);   // transmit timestamp T3
+        buf.extend_from_slice(&t1_ntp); // origin = T1 echoed
+        buf.extend_from_slice(&t2_ntp); // receive timestamp T2
+        buf.extend_from_slice(&t3_ntp); // transmit timestamp T3
 
         write_ef(&mut buf, 0x0104, &req.unique_id);
 
@@ -945,9 +964,17 @@ mod tests {
             let body = vec![0xABu8; body_len];
             let mut buf = Vec::new();
             write_ef(&mut buf, 0x0104, &body);
-            assert_eq!(buf.len() % 4, 0, "field for body_len={body_len} not 4-byte aligned");
+            assert_eq!(
+                buf.len() % 4,
+                0,
+                "field for body_len={body_len} not 4-byte aligned"
+            );
             let reported_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-            assert_eq!(reported_len, buf.len(), "reported length mismatch for body_len={body_len}");
+            assert_eq!(
+                reported_len,
+                buf.len(),
+                "reported length mismatch for body_len={body_len}"
+            );
         }
     }
 

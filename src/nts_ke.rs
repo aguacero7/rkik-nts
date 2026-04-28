@@ -73,13 +73,19 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     })?;
 
     let server_name = rustls::pki_types::ServerName::try_from(config.nts_ke_server.as_str())
-        .map_err(|e| Error::Tls(format!("Invalid server name '{}': {e}", config.nts_ke_server)))?
+        .map_err(|e| {
+            Error::Tls(format!(
+                "Invalid server name '{}': {e}",
+                config.nts_ke_server
+            ))
+        })?
         .to_owned();
 
-    let mut tls_stream = tokio::time::timeout(config.timeout, connector.connect(server_name, tcp_stream))
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(|e| Error::Tls(format!("TLS handshake failed: {e}")))?;
+    let mut tls_stream =
+        tokio::time::timeout(config.timeout, connector.connect(server_name, tcp_stream))
+            .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(|e| Error::Tls(format!("TLS handshake failed: {e}")))?;
 
     debug!("TLS handshake complete");
 
@@ -512,25 +518,24 @@ fn build_tls_config(
 
     let captured_certs = Arc::new(Mutex::new(Vec::new()));
 
-    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
-        if config.verify_tls_cert {
-            let roots = load_root_certs();
-            let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
-                .build()
-                .map_err(|e| Error::Tls(format!("Failed to build TLS verifier: {e}")))?;
-            Arc::new(CapturingVerifier {
-                inner,
-                captured_certs: captured_certs.clone(),
-            })
-        } else {
-            warn!("TLS certificate verification is disabled!");
-            Arc::new(CapturingVerifier {
-                inner: Arc::new(NoVerification {
-                    provider: rustls::crypto::ring::default_provider().into(),
-                }),
-                captured_certs: captured_certs.clone(),
-            })
-        };
+    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> = if config.verify_tls_cert {
+        let roots = load_root_certs();
+        let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
+            .build()
+            .map_err(|e| Error::Tls(format!("Failed to build TLS verifier: {e}")))?;
+        Arc::new(CapturingVerifier {
+            inner,
+            captured_certs: captured_certs.clone(),
+        })
+    } else {
+        warn!("TLS certificate verification is disabled!");
+        Arc::new(CapturingVerifier {
+            inner: Arc::new(NoVerification {
+                provider: rustls::crypto::ring::default_provider().into(),
+            }),
+            captured_certs: captured_certs.clone(),
+        })
+    };
 
     let mut tls_config =
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -734,10 +739,7 @@ where
     use tokio::io::AsyncReadExt;
 
     let mut header = [0u8; 4];
-    reader
-        .read_exact(&mut header)
-        .await
-        .map_err(Error::Io)?;
+    reader.read_exact(&mut header).await.map_err(Error::Io)?;
 
     let critical = (header[0] & 0x80) != 0;
     let type_id = u16::from_be_bytes([header[0] & 0x7F, header[1]]);

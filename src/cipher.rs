@@ -3,7 +3,7 @@
 //! Provides [`AeadCipher`], an internal enum that wraps AES-SIV-CMAC-256 and
 //! AES-SIV-CMAC-512 as defined in RFC 5297 and required by RFC 8915.
 
-use aes_siv::{KeyInit, siv::Aes128Siv, siv::Aes256Siv};
+use aes_siv::{siv::Aes128Siv, siv::Aes256Siv, KeyInit};
 
 use crate::error::{Error, Result};
 
@@ -116,18 +116,14 @@ impl AeadCipher {
                 let mut siv = Aes128Siv::new_from_slice(key.as_ref())
                     .expect("key length is validated at construction");
                 siv.decrypt(ad, ciphertext).map_err(|_| {
-                    Error::AeadVerificationFailed(
-                        "AES-SIV-256 authentication failed".to_string(),
-                    )
+                    Error::AeadVerificationFailed("AES-SIV-256 authentication failed".to_string())
                 })
             }
             AeadCipher::SivCmac512(key) => {
                 let mut siv = Aes256Siv::new_from_slice(key.as_ref())
                     .expect("key length is validated at construction");
                 siv.decrypt(ad, ciphertext).map_err(|_| {
-                    Error::AeadVerificationFailed(
-                        "AES-SIV-512 authentication failed".to_string(),
-                    )
+                    Error::AeadVerificationFailed("AES-SIV-512 authentication failed".to_string())
                 })
             }
         }
@@ -186,7 +182,11 @@ mod tests {
         let key = [1u8; 32];
         let cipher = AeadCipher::from_key_bytes(AEAD_AES_SIV_CMAC_256, &key).unwrap();
         let ct = cipher.encrypt_siv(&[b"aad"], &[]).unwrap();
-        assert_eq!(ct.len(), 16, "SIV tag must be exactly 16 bytes for empty plaintext");
+        assert_eq!(
+            ct.len(),
+            16,
+            "SIV tag must be exactly 16 bytes for empty plaintext"
+        );
         let pt = cipher.decrypt_siv(&[b"aad"], &ct).unwrap();
         assert!(pt.is_empty());
     }

@@ -212,7 +212,11 @@ impl NtsClient {
         let request = nts_state.create_request()?;
 
         // Send request using stored socket
-        debug!("Sending NTS request ({} bytes) to {}", request.len(), ntp_server);
+        debug!(
+            "Sending NTS request ({} bytes) to {}",
+            request.len(),
+            ntp_server
+        );
         socket.send_to(&request, ntp_server).await?;
 
         // Receive response with timeout.

@@ -16,6 +16,8 @@ All notable changes to this project will be documented in this file.
 - Derived NTS exporter keys with the correct NTPv4 protocol context
 - Serialized the NTS Authenticator (`0x0404`) in the server-compatible wire format
 - Removed dependency on unstable packet-building assumptions from earlier iterations
+- Changed crate author contact
+- Changed License for MIT
 
 ### Fixed
 - Public NTS queries now authenticate successfully against real servers such as `time.cloudflare.com` and `nts.ntp.se`

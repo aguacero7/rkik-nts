@@ -2,7 +2,6 @@
 
 use std::net::SocketAddr;
 
-use ntp_proto::PollInterval;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
@@ -131,7 +130,6 @@ impl NtsClient {
             "0.0.0.0:0"
         };
         let socket = UdpSocket::bind(bind_addr).await?;
-        socket.connect(ntp_server).await?;
 
         // Extract NTS state for authenticated queries
         let nts_state = nts_result.into_nts_state();
@@ -211,18 +209,20 @@ impl NtsClient {
         );
 
         // Create NTS-authenticated NTP request
-        let poll_interval = PollInterval::default();
-        let request = nts_state.create_request(poll_interval)?;
+        let request = nts_state.create_request()?;
 
-        // Send request
-        debug!("Sending NTS request ({} bytes)", request.len());
-        socket.send(&request).await?;
+        // Send request using stored socket
+        debug!("Sending NTS request ({} bytes) to {}", request.len(), ntp_server);
+        socket.send_to(&request, ntp_server).await?;
 
-        // Receive response with timeout
+        // Receive response with timeout.
+        // Use recv_from instead of recv so that responses from anycast
+        // services (e.g. Cloudflare) are accepted regardless of source IP.
         let mut buf = vec![0u8; 1024];
-        let len = timeout(self.config.timeout, socket.recv(&mut buf))
+        let (len, src) = timeout(self.config.timeout, socket.recv_from(&mut buf))
             .await
             .map_err(|_| Error::Timeout)??;
+        debug!("Received {} bytes from {}", len, src);
 
         buf.truncate(len);
 

@@ -1,23 +1,28 @@
-//! NTS Key Exchange (NTS-KE) implementation using ntp-proto.
+//! NTS Key Exchange (NTS-KE) implementation (RFC 8915 §4).
 //!
-//! This module wraps ntp-proto's KeyExchangeClient to provide an async interface.
+//! This module implements the NTS-KE handshake directly over TLS 1.3 with
+//! the `"ntske/1"` ALPN identifier.  Keys are derived from the TLS session
+//! via RFC 5705 keying-material export.
 
 use std::io::Write;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use ntp_proto::{KeyExchangeClient, KeyExchangeError, KeyExchangeResult, ProtocolVersion};
 use rustls::pki_types::{CertificateDer, ServerName as RustlsServerName, UnixTime};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 use x509_parser::prelude::*;
 
+use crate::cipher::{AeadCipher, AEAD_AES_SIV_CMAC_256, AEAD_AES_SIV_CMAC_512};
 use crate::config::NtsClientConfig;
 use crate::error::{Error, Result};
 use crate::types::{CertificateInfo, NtsKeResult};
 
-/// Perform NTS-KE using ntp-proto's KeyExchangeClient
+/// Perform the NTS Key Exchange handshake (RFC 8915 §4).
+///
+/// Opens a TLS 1.3 connection to the NTS-KE server with ALPN `"ntske/1"`,
+/// exchanges NTS-KE records, and derives the c2s/s2c cipher keys from the
+/// TLS session via RFC 5705 keying material export.
 pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResult> {
     let ke_start = std::time::Instant::now();
 
@@ -26,132 +31,205 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
         config.nts_ke_server, config.nts_ke_port
     );
 
-    // Resolve server address
     let server_addr = resolve_server(&config.nts_ke_server, config.nts_ke_port).await?;
-    debug!("Resolved server address: {}", server_addr);
+    debug!("Resolved NTS-KE server: {server_addr}");
 
-    // Build TLS config with certificate capturing
     let (tls_config, captured_certs) = build_tls_config(config)?;
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
-    // Determine protocol version (always V4 for now)
-    let protocol_version = ProtocolVersion::V4;
-
-    // Perform key exchange in a blocking task since KeyExchangeClient uses sync I/O
-    let server_name = config.nts_ke_server.clone();
-    let timeout_duration = config.timeout;
-
-    let result = tokio::task::spawn_blocking(move || {
-        perform_nts_ke_blocking(
-            server_addr,
-            server_name,
-            tls_config,
-            protocol_version,
-            timeout_duration,
-        )
-    })
+    let tcp_stream = tokio::time::timeout(
+        config.timeout,
+        tokio::net::TcpStream::connect(server_addr),
+    )
     .await
-    .map_err(|e| Error::KeyExchange(format!("Task join error: {}", e)))??;
+    .map_err(|_| Error::Timeout)?
+    .map_err(Error::Io)?;
+
+    let server_name = rustls::pki_types::ServerName::try_from(config.nts_ke_server.as_str())
+        .map_err(|e| Error::Tls(format!("Invalid server name '{}': {e}", config.nts_ke_server)))?
+        .to_owned();
+
+    let mut tls_stream = tokio::time::timeout(config.timeout, connector.connect(server_name, tcp_stream))
+        .await
+        .map_err(|_| Error::Timeout)?
+        .map_err(|e| Error::Tls(format!("TLS handshake failed: {e}")))?;
+
+    debug!("TLS handshake complete");
+
+    {
+        use tokio::io::AsyncWriteExt;
+
+        // NTS Next Protocol Negotiation (type 1, critical, RFC 8915 §4.1.2).
+        // Body: list of 2-byte protocol IDs. NTPv4 = 0x0000.
+        write_record(&mut tls_stream, true, 1, &[0x00, 0x00]).await?;
+
+        // AEAD Algorithm Negotiation (type 4, critical).
+        // Offer AEAD_AES_SIV_CMAC_256 (15) then AEAD_AES_SIV_CMAC_512 (17).
+        write_record(&mut tls_stream, true, 4, &[0x00, 0x0F, 0x00, 0x11]).await?;
+
+        // End of Message (type 0, critical).
+        write_record(&mut tls_stream, true, 0, &[]).await?;
+
+        tls_stream.flush().await.map_err(Error::Io)?;
+    }
+
+    // Read server records until End of Message.
+    let mut aead_alg: Option<u16> = None;
+    let mut cookies: Vec<Vec<u8>> = Vec::new();
+    let mut ntp_server: Option<String> = None;
+    let mut ntp_port: Option<u16> = None;
+
+    loop {
+        let (critical, type_id, body) = read_record(&mut tls_stream).await?;
+
+        match type_id {
+            // End of Message
+            0 => {
+                debug!("Received NTS-KE End of Message");
+                break;
+            }
+            // NTS Next Protocol Negotiation — server echoes confirmed protocol(s).
+            // Body is a list of 2-byte protocol IDs; we accept as long as it's present.
+            1 => {
+                debug!("Received NTS-KE Next Protocol Negotiation response ({} bytes)", body.len());
+            }
+            // AEAD Algorithm Negotiation
+            4 => {
+                if body.len() == 2 {
+                    let alg = u16::from_be_bytes([body[0], body[1]]);
+                    if AeadCipher::key_len(alg).is_some() {
+                        aead_alg = Some(alg);
+                        debug!("Negotiated AEAD algorithm: {alg}");
+                    } else {
+                        debug!("Skipping unsupported AEAD algorithm: {alg}");
+                    }
+                }
+            }
+            // New Cookie for NTPv4
+            5 => {
+                debug!("Received cookie ({} bytes)", body.len());
+                cookies.push(body);
+            }
+            // NTPv4 Server Negotiation
+            6 => {
+                if let Ok(name) = String::from_utf8(body) {
+                    debug!("NTS-KE negotiated NTP server: {name}");
+                    ntp_server = Some(name);
+                }
+            }
+            // NTPv4 Port Negotiation
+            7 => {
+                if body.len() == 2 {
+                    let port = u16::from_be_bytes([body[0], body[1]]);
+                    debug!("NTS-KE negotiated NTP port: {port}");
+                    ntp_port = Some(port);
+                }
+            }
+            _ if critical => {
+                return Err(Error::KeyExchange(format!(
+                    "Received unknown critical NTS-KE record (type {type_id})"
+                )));
+            }
+            _ => {
+                debug!("Ignoring unknown non-critical NTS-KE record (type {type_id})");
+            }
+        }
+    }
+
+    // Validate the exchange result.
+    let alg_id = aead_alg.ok_or_else(|| {
+        Error::KeyExchange("Server did not negotiate an AEAD algorithm".to_string())
+    })?;
+    if cookies.is_empty() {
+        return Err(Error::KeyExchange(
+            "Server did not provide any NTS cookies".to_string(),
+        ));
+    }
+
+    // Derive c2s and s2c keys via TLS keying material export (RFC 5705 /
+    // RFC 8446 §7.5, label "EXPORTER-network-time-security").
+    //
+    // Context: [protocol_id_hi, protocol_id_lo, alg_id_hi, alg_id_lo, direction]
+    // For NTPv4, protocol ID is 0x0000.
+    //   direction 0x00 = client-to-server
+    //   direction 0x01 = server-to-client
+    let key_len = AeadCipher::key_len(alg_id).unwrap(); // validated above
+    let protocol_id = 0u16.to_be_bytes();
+    let alg_bytes = alg_id.to_be_bytes();
+    let mut c2s_key = vec![0u8; key_len];
+    let mut s2c_key = vec![0u8; key_len];
+
+    {
+        let (_, tls_conn) = tls_stream.get_ref();
+        tls_conn
+            .export_keying_material(
+                &mut c2s_key,
+                b"EXPORTER-network-time-security",
+                Some(&[
+                    protocol_id[0],
+                    protocol_id[1],
+                    alg_bytes[0],
+                    alg_bytes[1],
+                    0x00,
+                ]),
+            )
+            .map_err(|e| Error::Tls(format!("TLS key export failed: {e}")))?;
+        tls_conn
+            .export_keying_material(
+                &mut s2c_key,
+                b"EXPORTER-network-time-security",
+                Some(&[
+                    protocol_id[0],
+                    protocol_id[1],
+                    alg_bytes[0],
+                    alg_bytes[1],
+                    0x01,
+                ]),
+            )
+            .map_err(|e| Error::Tls(format!("TLS key export failed: {e}")))?;
+    }
+
+    let c2s = AeadCipher::from_key_bytes(alg_id, &c2s_key)?;
+    let s2c = AeadCipher::from_key_bytes(alg_id, &s2c_key)?;
 
     let ke_duration = ke_start.elapsed();
-    debug!("NTS-KE completed in {:?}", ke_duration);
+    debug!("NTS-KE completed in {ke_duration:?}");
 
-    // Extract certificate information after successful handshake
+    // Extract certificate information captured during the TLS handshake.
     let certificate = {
         let certs = captured_certs.lock().unwrap();
-        if !certs.is_empty() {
-            extract_certificate_info(&certs)
-        } else {
+        if certs.is_empty() {
             None
+        } else {
+            extract_certificate_info(&certs)
         }
     };
 
-    if let Some(ref cert) = certificate {
-        debug!(
-            "Captured certificate: subject={}, issuer={}",
-            cert.subject, cert.issuer
-        );
-    }
+    // Determine the NTP server and port to use.
+    let ntp_host = ntp_server.unwrap_or_else(|| config.nts_ke_server.clone());
+    let ntp_port = ntp_port.unwrap_or(123);
+    let ntp_server_addr = resolve_server(&ntp_host, ntp_port).await?;
 
-    // Convert KeyExchangeResult to NtsKeResult
-    convert_ke_result(result, ke_duration, certificate)
-}
+    let aead_algorithm = match alg_id {
+        AEAD_AES_SIV_CMAC_256 => "AEAD_AES_SIV_CMAC_256".to_string(),
+        AEAD_AES_SIV_CMAC_512 => "AEAD_AES_SIV_CMAC_512".to_string(),
+        _ => format!("UNKNOWN_{alg_id}"),
+    };
 
-/// Perform NTS-KE in a blocking context
-fn perform_nts_ke_blocking(
-    server_addr: SocketAddr,
-    server_name: String,
-    tls_config: ntp_proto::tls_utils::ClientConfig,
-    protocol_version: ProtocolVersion,
-    timeout_duration: Duration,
-) -> Result<KeyExchangeResult> {
-    // Connect TCP socket (blocking)
-    let mut socket =
-        std::net::TcpStream::connect_timeout(&server_addr, timeout_duration).map_err(Error::Io)?;
+    info!(
+        "NTS-KE successful. NTP server: {ntp_server_addr}, algorithm: {aead_algorithm}, cookies: {}",
+        cookies.len()
+    );
 
-    socket.set_nonblocking(true).map_err(Error::Io)?;
-
-    debug!("TCP connection established");
-
-    // Create KeyExchangeClient
-    let mut ke_client = KeyExchangeClient::new(
-        server_name,
-        tls_config,
-        protocol_version,
-        Vec::<String>::new(), // no denied servers
-    )
-    .map_err(Error::from)?;
-
-    debug!("KeyExchangeClient created");
-
-    // Run the state machine
-    let start = std::time::Instant::now();
-    loop {
-        if start.elapsed() > timeout_duration {
-            return Err(Error::Timeout);
-        }
-
-        // Write any pending TLS data to socket
-        if ke_client.wants_write() {
-            match ke_client.write_socket(&mut socket) {
-                Ok(n) => {
-                    if n > 0 {
-                        debug!("Wrote {} bytes to socket", n);
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(Error::Io(e)),
-            }
-        }
-
-        // Read any available data from socket
-        if ke_client.wants_read() {
-            match ke_client.read_socket(&mut socket) {
-                Ok(n) => {
-                    if n > 0 {
-                        debug!("Read {} bytes from socket", n);
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(Error::Io(e)),
-            }
-        }
-
-        // Progress the state machine
-        match ke_client.progress() {
-            std::ops::ControlFlow::Break(Ok(result)) => {
-                debug!("NTS-KE succeeded");
-                return Ok(result);
-            }
-            std::ops::ControlFlow::Break(Err(e)) => {
-                return Err(Error::from(e));
-            }
-            std::ops::ControlFlow::Continue(client) => {
-                ke_client = client;
-                // Small sleep to avoid busy-waiting
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
-    }
+    Ok(NtsKeResult::new(
+        ntp_server_addr,
+        aead_algorithm,
+        cookies,
+        ke_duration,
+        c2s,
+        s2c,
+        certificate,
+    ))
 }
 
 /// Extract certificate information from the peer certificate
@@ -271,84 +349,98 @@ impl rustls::client::danger::ServerCertVerifier for CapturingVerifier {
     }
 }
 
-/// Build TLS config for NTS-KE with certificate capturing
+/// Build a `rustls::ClientConfig` for NTS-KE.
+///
+/// The configuration enforces TLS 1.3 and sets the ALPN protocol to
+/// `"ntske/1"` as required by RFC 8915 §4. A [`CapturingVerifier`] is
+/// layered on top of the real verifier so that the peer certificate chain
+/// can be surfaced in [`NtsKeResult`].
 fn build_tls_config(
     config: &NtsClientConfig,
 ) -> Result<(
-    ntp_proto::tls_utils::ClientConfig,
+    rustls::ClientConfig,
     Arc<Mutex<Vec<CertificateDer<'static>>>>,
 )> {
-    use ntp_proto::tls_utils::{self};
-
-    // Ensure a default crypto provider is installed
-    // This is safe to call multiple times - it will only install once
+    // Ensure the ring crypto provider is installed (idempotent).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Enable TLS keylog for Wireshark decryption if SSLKEYLOGFILE is set
-    let key_log = std::env::var("SSLKEYLOGFILE")
+    let captured_certs = Arc::new(Mutex::new(Vec::new()));
+
+    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
+        if config.verify_tls_cert {
+            let roots = load_root_certs();
+            let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
+                .build()
+                .map_err(|e| Error::Tls(format!("Failed to build TLS verifier: {e}")))?;
+            Arc::new(CapturingVerifier {
+                inner,
+                captured_certs: captured_certs.clone(),
+            })
+        } else {
+            warn!("TLS certificate verification is disabled!");
+            Arc::new(CapturingVerifier {
+                inner: Arc::new(NoVerification {
+                    provider: rustls::crypto::ring::default_provider().into(),
+                }),
+                captured_certs: captured_certs.clone(),
+            })
+        };
+
+    let mut tls_config =
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+
+    // RFC 8915 §4 requires the "ntske/1" ALPN protocol identifier.
+    tls_config.alpn_protocols = vec![b"ntske/1".to_vec()];
+
+    // Enable TLS key logging if SSLKEYLOGFILE is set (for Wireshark).
+    if let Some(kl) = make_key_log() {
+        tls_config.key_log = kl;
+    }
+
+    Ok((tls_config, captured_certs))
+}
+
+/// Load root certificates from the OS trust store, supplemented by the
+/// embedded Mozilla root set from `webpki-roots`.
+fn load_root_certs() -> rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore::empty();
+
+    let native = rustls_native_certs::load_native_certs();
+    for cert in native.certs {
+        if let Err(e) = roots.add(cert) {
+            debug!("Skipping native CA cert: {e}");
+        }
+    }
+    for err in native.errors {
+        debug!("Native cert load warning: {err}");
+    }
+
+    // Add the Mozilla root set as a fallback (covers cases where the OS
+    // trust store is empty or unavailable).
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    roots
+}
+
+/// Build a TLS key-log sink from the `SSLKEYLOGFILE` environment variable.
+///
+/// Returns `None` if the variable is unset or if the file cannot be opened.
+fn make_key_log() -> Option<Arc<dyn rustls::KeyLog>> {
+    std::env::var("SSLKEYLOGFILE")
         .ok()
         .and_then(|path| {
-            debug!("Enabling TLS keylog to: {}", path);
+            debug!("Enabling TLS key log: {path}");
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&path)
+                .map_err(|e| warn!("Failed to open SSLKEYLOGFILE '{}': {e}", path))
                 .ok()
         })
-        .map(|file| Arc::new(KeyLogFile(Mutex::new(file))) as Arc<dyn rustls::KeyLog>);
-
-    // Create container for captured certificates
-    let captured_certs = Arc::new(Mutex::new(Vec::new()));
-
-    if config.verify_tls_cert {
-        // Normal verification with system certificates
-        let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
-        let provider = builder.crypto_provider().clone();
-
-        let platform_verifier = tls_utils::PlatformVerifier::new().with_provider(provider);
-
-        // Wrap with capturing verifier
-        let capturing_verifier = CapturingVerifier {
-            inner: Arc::new(platform_verifier),
-            captured_certs: captured_certs.clone(),
-        };
-
-        let mut tls_config = builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(capturing_verifier))
-            .with_no_client_auth();
-
-        if let Some(kl) = key_log {
-            tls_config.key_log = kl;
-        }
-
-        Ok((tls_config, captured_certs))
-    } else {
-        // No verification mode (for self-signed certificates)
-        warn!("TLS certificate verification is disabled!");
-
-        let builder = tls_utils::client_config_builder_with_protocol_versions(&[&tls_utils::TLS13]);
-        let provider = builder.crypto_provider().clone();
-
-        // Use NoVerification verifier wrapped with capturing
-        let no_verification = NoVerification { provider };
-
-        let capturing_verifier = CapturingVerifier {
-            inner: Arc::new(no_verification),
-            captured_certs: captured_certs.clone(),
-        };
-
-        let mut tls_config = builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(capturing_verifier))
-            .with_no_client_auth();
-
-        if let Some(kl) = key_log {
-            tls_config.key_log = kl;
-        }
-
-        Ok((tls_config, captured_certs))
-    }
+        .map(|file| Arc::new(KeyLogFile(Mutex::new(file))) as Arc<dyn rustls::KeyLog>)
 }
 
 /// A certificate verifier that accepts all certificates (for testing only!)
@@ -397,106 +489,20 @@ impl rustls::client::danger::ServerCertVerifier for NoVerification {
 /// Resolve server address
 async fn resolve_server(server: &str, port: u16) -> Result<SocketAddr> {
     let addrs = format!("{}:{}", server, port)
-        .to_socket_addrs()
+        .parse::<SocketAddr>()
+        .map(|a| vec![a].into_iter())
+        .or_else(|_| {
+            use std::net::ToSocketAddrs;
+            format!("{}:{}", server, port)
+                .to_socket_addrs()
+                .map(|it| it.collect::<Vec<_>>().into_iter())
+        })
         .map_err(|e| Error::ServerUnavailable(format!("DNS resolution failed: {}", e)))?;
 
     addrs
         .into_iter()
         .next()
         .ok_or_else(|| Error::ServerUnavailable("No addresses resolved".to_string()))
-}
-
-/// Convert ntp-proto's KeyExchangeResult to our NtsKeResult
-fn convert_ke_result(
-    mut result: KeyExchangeResult,
-    ke_duration: Duration,
-    certificate: Option<CertificateInfo>,
-) -> std::result::Result<NtsKeResult, Error> {
-    // Try to parse the remote as an IP address first, otherwise resolve it
-    let ntp_server = if let Ok(ip_addr) = result.remote.parse() {
-        SocketAddr::new(ip_addr, result.port)
-    } else {
-        // If not an IP, try to resolve the hostname
-        let addr_str = format!("{}:{}", result.remote, result.port);
-        addr_str
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut addrs| addrs.next())
-            .ok_or_else(|| {
-                Error::Other(format!(
-                    "Failed to resolve NTP server address: {}:{}. DNS resolution returned no results.",
-                    result.remote, result.port
-                ))
-            })?
-    };
-
-    // Extract cookies from the CookieStash by consuming them using the public API
-    // CookieStash is not Clone, so we need to extract all cookies into a Vec
-    let mut cookies = Vec::new();
-    while let Some(cookie) = result.nts.get_cookie() {
-        cookies.push(cookie);
-    }
-
-    debug!("Extracted {} cookies from NTS-KE", cookies.len());
-
-    // Extract the ciphers from SourceNtsData using get_keys()
-    // This consumes the SourceNtsData and returns (c2s, s2c) ciphers
-    let (c2s, s2c) = result.nts.get_keys();
-
-    debug!("Extracted NTS ciphers for authenticated NTP");
-
-    let aead_algorithm = match c2s.key_bytes().len() {
-        32 => "AEAD_AES_SIV_CMAC_256".to_string(),
-        64 => "AEAD_AES_SIV_CMAC_512".to_string(),
-        other => format!("UNKNOWN_KEY_LEN_{}", other),
-    };
-
-    Ok(NtsKeResult::new(
-        ntp_server,
-        aead_algorithm,
-        cookies,
-        ke_duration,
-        c2s,
-        s2c,
-        certificate,
-    ))
-}
-
-/// Convert KeyExchangeError to our Error type
-impl From<KeyExchangeError> for Error {
-    fn from(err: KeyExchangeError) -> Self {
-        match err {
-            KeyExchangeError::UnrecognizedCriticalRecord => {
-                Error::KeyExchange("Unrecognized critical NTS record".to_string())
-            }
-            KeyExchangeError::BadRequest => Error::KeyExchange("Bad request".to_string()),
-            KeyExchangeError::InternalServerError => {
-                Error::KeyExchange("Internal server error".to_string())
-            }
-            KeyExchangeError::UnknownErrorCode(code) => {
-                Error::KeyExchange(format!("Unknown error code: {}", code))
-            }
-            KeyExchangeError::BadResponse => Error::KeyExchange("Bad response".to_string()),
-            KeyExchangeError::NoValidProtocol => {
-                Error::KeyExchange("No valid protocol negotiated".to_string())
-            }
-            KeyExchangeError::NoValidAlgorithm => {
-                Error::KeyExchange("No valid AEAD algorithm negotiated".to_string())
-            }
-            KeyExchangeError::InvalidFixedKeyLength => {
-                Error::KeyExchange("Invalid fixed key length".to_string())
-            }
-            KeyExchangeError::NoCookies => Error::KeyExchange("No cookies received".to_string()),
-            KeyExchangeError::CookiesTooBig => Error::KeyExchange("Cookies too big".to_string()),
-            KeyExchangeError::Io(e) => Error::Io(e),
-            KeyExchangeError::Tls(e) => Error::Tls(format!("TLS error: {:?}", e)),
-            KeyExchangeError::Certificate(e) => Error::Tls(format!("Certificate error: {:?}", e)),
-            KeyExchangeError::DnsName(e) => Error::Tls(format!("DNS name error: {:?}", e)),
-            KeyExchangeError::IncompleteResponse => {
-                Error::KeyExchange("Incomplete NTS-KE response".to_string())
-            }
-        }
-    }
 }
 
 /// KeyLog handler for writing TLS secrets to file (for Wireshark decryption)
@@ -521,4 +527,118 @@ impl rustls::KeyLog for KeyLogFile {
 /// Encode bytes to hexadecimal string
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Write a single NTS-KE record to an async writer.
+///
+/// Wire format (RFC 8915 §4.1):
+///
+/// ```text
+/// +--------+--------+--------+--------+
+/// |C| type (15 bits)|  body length    |
+/// +--------+--------+--------+--------+
+/// |            body (variable)         |
+/// ```
+///
+/// The critical bit (C) is the MSB of the first octet. The 15-bit record
+/// type and 16-bit body length are in network byte order.
+async fn write_record<W>(writer: &mut W, critical: bool, type_id: u16, body: &[u8]) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt;
+
+    let body_len = u16::try_from(body.len())
+        .map_err(|_| Error::Protocol("NTS-KE record body exceeds 65535 bytes".to_string()))?;
+    let type_bytes = type_id.to_be_bytes();
+    let len_bytes = body_len.to_be_bytes();
+    let critical_bit: u8 = if critical { 0x80 } else { 0x00 };
+
+    let header = [
+        critical_bit | (type_bytes[0] & 0x7F),
+        type_bytes[1],
+        len_bytes[0],
+        len_bytes[1],
+    ];
+    writer.write_all(&header).await.map_err(Error::Io)?;
+    writer.write_all(body).await.map_err(Error::Io)?;
+    Ok(())
+}
+
+/// Read a single NTS-KE record from an async reader.
+///
+/// Returns `(critical, type_id, body)`. See [`write_record`] for the wire format.
+async fn read_record<R>(reader: &mut R) -> Result<(bool, u16, Vec<u8>)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut header = [0u8; 4];
+    reader
+        .read_exact(&mut header)
+        .await
+        .map_err(Error::Io)?;
+
+    let critical = (header[0] & 0x80) != 0;
+    let type_id = u16::from_be_bytes([header[0] & 0x7F, header[1]]);
+    let body_len = u16::from_be_bytes([header[2], header[3]]) as usize;
+
+    let mut body = vec![0u8; body_len];
+    reader.read_exact(&mut body).await.map_err(Error::Io)?;
+
+    Ok((critical, type_id, body))
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::{read_record, write_record};
+    use std::io::Cursor;
+
+    #[tokio::test]
+    async fn test_end_of_message_roundtrip() {
+        let mut buf = Vec::new();
+        write_record(&mut buf, true, 0, &[]).await.unwrap();
+        // Critical flag set, type 0, length 0 → [0x80, 0x00, 0x00, 0x00]
+        assert_eq!(buf, [0x80, 0x00, 0x00, 0x00]);
+        let mut cursor = Cursor::new(buf.as_slice());
+        let (critical, type_id, body) = read_record(&mut cursor).await.unwrap();
+        assert!(critical);
+        assert_eq!(type_id, 0);
+        assert!(body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cookie_record_roundtrip() {
+        let cookie = b"hello_cookie_bytes";
+        let mut buf = Vec::new();
+        write_record(&mut buf, false, 5, cookie).await.unwrap();
+        let mut cursor = Cursor::new(buf.as_slice());
+        let (critical, type_id, body) = read_record(&mut cursor).await.unwrap();
+        assert!(!critical);
+        assert_eq!(type_id, 5);
+        assert_eq!(body, cookie);
+    }
+
+    #[tokio::test]
+    async fn test_aead_algorithm_record_roundtrip() {
+        // Type 4, body = algorithm ID 15 as big-endian u16
+        let body = 15u16.to_be_bytes();
+        let mut buf = Vec::new();
+        write_record(&mut buf, true, 4, &body).await.unwrap();
+        let mut cursor = Cursor::new(buf.as_slice());
+        let (critical, type_id, record_body) = read_record(&mut cursor).await.unwrap();
+        assert!(critical);
+        assert_eq!(type_id, 4);
+        assert_eq!(record_body, body);
+    }
+
+    #[tokio::test]
+    async fn test_critical_flag_encoding() {
+        let mut buf = Vec::new();
+        write_record(&mut buf, true, 0x1234, &[]).await.unwrap();
+        // Critical bit set: first byte = 0x80 | (0x12 & 0x7F) = 0x80 | 0x12 = 0x92
+        assert_eq!(buf[0], 0x92);
+        assert_eq!(buf[1], 0x34);
+    }
 }

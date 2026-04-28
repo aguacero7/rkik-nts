@@ -26,14 +26,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {
             println!("✓ Connected to NTS server successfully!\n");
 
-            if let Some(ke_result) = client.nts_ke_info() {
+            if let Some(ke_info) = client.nts_ke_info() {
                 println!("NTS-KE handshake successful!");
-                println!("NTP Server: {}", ke_result.ntp_server);
-                println!("AEAD Algorithm: {}", ke_result.aead_algorithm);
-                println!("Cookies received: {}", ke_result.cookie_count());
-                println!("Handshake duration: {:?}", ke_result.ke_duration());
+                println!("NTP Server: {}", ke_info.ntp_server);
+                println!("AEAD Algorithm: {}", ke_info.aead_algorithm);
+                println!("Initial cookies: {}", ke_info.initial_cookie_count);
+                println!("Handshake duration: {:?}", ke_info.ke_duration);
 
-                if let Some(ref cert) = ke_result.certificate {
+                if let Some(ref cert) = ke_info.certificate {
                     println!("\n=== TLS Certificate Information ===");
                     println!("Subject: {}", cert.subject);
                     println!("Issuer: {}", cert.issuer);

@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/rkik-nts.svg)](https://crates.io/crates/rkik-nts)
 [![Documentation](https://docs.rs/rkik-nts/badge.svg)](https://docs.rs/rkik-nts)
 
-A high-level **NTS (Network Time Security) Client** library for Rust, based on [ntpd-rs](https://github.com/pendulum-project/ntpd-rs) from the Pendulum Project.
+A high-level **NTS (Network Time Security) client** library for Rust with a self-contained RFC 8915 implementation.
 
 This library provides a simple, safe, and ergonomic API for querying time from NTS-secured NTP servers. It handles the complexity of NTS key exchange and authenticated time synchronization, making it easy to integrate secure time synchronization into your applications.
 
@@ -15,7 +15,7 @@ This library provides a simple, safe, and ergonomic API for querying time from N
 - **Simple API**: Easy-to-use client interface with sensible defaults
 - **Async**: Built on Tokio for efficient async I/O
 - **Configurable**: Flexible configuration options for advanced use cases
-- **Battle-tested**: Based on ntpd-rs from Project Pendulum
+- **Self-contained**: NTS-KE and NTS-protected NTP are implemented directly in this crate
 - **Integration-ready**: Designed for seamless integration with [rkik](https://github.com/aguacero7/rkik)
 
 ## Quick Start
@@ -24,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rkik-nts = "0.4"
+rkik-nts = "1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -67,7 +67,7 @@ cargo run --example simple_client --features tracing-subscriber
 cargo run --example nts_end_to_end --features tracing-subscriber
 ```
 
-### Certificate Information (New in v0.3.0)
+### Certificate Information
 
 Access TLS certificate information from the NTS-KE handshake:
 
@@ -117,6 +117,8 @@ client.connect().await?;
 let time = client.get_time().await?;
 ```
 
+Note: retry logic is not automatic; `max_retries` is currently a reserved configuration value.
+
 See the [examples/](examples/) directory for more detailed examples.
 
 ## Advanced Features
@@ -145,12 +147,16 @@ Here are some public NTS servers you can use for testing:
 - `time.cloudflare.com` - Cloudflare
 - `nts.ntp.se` - Netnod (Sweden)
 - `ntppool1.time.nl` - NLnet Labs (Netherlands)
-- `time.txryan.com` - Ryan Sleevi
+- `time.txryan.com` - Tanner Ryan
 - `nts.ntp.org.au` - Australian NTP Pool
+- `ptbtime1.ptb.de` - PTB (Germany, public service availability not guaranteed)
+
+The current network test suite is validated against `time.cloudflare.com` and `nts.ntp.se`.
+PTB servers are exercised opportunistically because PTB explicitly states that uninterrupted public availability is not guaranteed.
 
 ## Integration with rkik
 
-This library is designed for seamless integration with rkik, but can also be used as a standalone NTS client library. The API is intentionally kept simple and focused on the core functionality of NTS time synchronization.
+This library is designed for seamless integration with rkik, but can also be used as a standalone NTS client library. The API is intentionally kept simple and focused on authenticated time acquisition.
 
 ## Architecture
 
@@ -200,21 +206,11 @@ cargo doc --open
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
-## Based on ntpd-rs
-
-This library is built on top of [ntpd-rs](https://github.com/pendulum-project/ntpd-rs), a memory-safe NTP implementation developed by the Pendulum Project. The ntpd-rs project is maintained by Tweede golf and was originally funded by ISRG's Prossimo project.
-
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-## Acknowledgments
-
-- The [Pendulum Project](https://github.com/pendulum-project) for ntpd-rs
-- [Tweede golf](https://tweedegolf.nl/) for maintaining ntpd-rs
-
 ## Resources
 
 - [RFC 8915: Network Time Security for the Network Time Protocol](https://datatracker.ietf.org/doc/html/rfc8915)
-- [ntpd-rs Documentation](https://docs.ntpd-rs.pendulum-project.org/)
 - [NTS Pool](https://www.ntppool.org/en/use.html#nts)

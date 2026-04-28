@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use ntp_proto::Cipher;
+use crate::cipher::AeadCipher;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -106,10 +106,10 @@ pub struct NtsKeResult {
     pub(crate) ke_duration: std::time::Duration,
 
     /// Client-to-server cipher for encrypting NTP requests.
-    pub(crate) c2s: Box<dyn Cipher>,
+    pub(crate) c2s: AeadCipher,
 
     /// Server-to-client cipher for decrypting NTP responses.
-    pub(crate) s2c: Box<dyn Cipher>,
+    pub(crate) s2c: AeadCipher,
 
     /// TLS certificate information (optional, for diagnostics)
     pub certificate: Option<CertificateInfo>,
@@ -137,8 +137,8 @@ impl NtsKeResult {
         aead_algorithm: String,
         cookies: Vec<Vec<u8>>,
         ke_duration: std::time::Duration,
-        c2s: Box<dyn Cipher>,
-        s2c: Box<dyn Cipher>,
+        c2s: AeadCipher,
+        s2c: AeadCipher,
         certificate: Option<CertificateInfo>,
     ) -> Self {
         Self {
@@ -241,7 +241,7 @@ mod tests {
     fn test_nts_ke_result_cookie_count() {
         // Test cookie_count and has_cookies without creating full NtsKeResult
         // since SourceNtsData doesn't have a public constructor
-        let cookies = vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8, 9]];
+        let cookies = [vec![1, 2, 3, 4], vec![5, 6, 7, 8, 9]];
         assert_eq!(cookies.len(), 2);
         assert!(!cookies.is_empty());
 

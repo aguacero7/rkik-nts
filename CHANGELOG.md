@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-28
+
+### Added
+- Complete self-contained RFC 8915 implementation for authenticated NTP queries
+- Live network test suite behind the `network-tests` feature
+- End-to-end coverage for Cloudflare and Netnod public NTS servers
+
+### Changed
+- Promoted crate version to `1.0.0` for stable integration into `rkik`
+- Derived NTS exporter keys with the correct NTPv4 protocol context
+- Serialized the NTS Authenticator (`0x0404`) in the server-compatible wire format
+- Removed dependency on unstable packet-building assumptions from earlier iterations
+
+### Fixed
+- Public NTS queries now authenticate successfully against real servers such as `time.cloudflare.com` and `nts.ntp.se`
+- PTB network coverage is treated as opportunistic in tests because PTB explicitly does not guarantee uninterrupted public service availability
+
+### Documentation
+- Updated crate docs, README and integration guidance for the `1.0.0` release line
+- Removed outdated claims that the crate is based on `ntpd-rs`
+
 ## [0.4.0] - 2026-01-23
 
 ### Added
@@ -116,5 +137,6 @@ All notable changes to this project will be documented in this file.
 - Examples of basic and advanced usage
 - List of public NTS servers for testing
 
-[Unreleased]: https://github.com/aguacero7/rkik-nts/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/aguacero7/rkik-nts/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/aguacero7/rkik-nts/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/aguacero7/rkik-nts/compare/v0.3.0...v0.4.0

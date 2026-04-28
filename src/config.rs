@@ -19,17 +19,18 @@ pub struct NtsClientConfig {
     /// Timeout for network operations.
     pub timeout: Duration,
 
-    /// Maximum number of retry attempts for failed operations.
+    /// Maximum number of retry attempts for failed operations (currently unused).
     pub max_retries: u32,
 
     /// Whether to verify the server's TLS certificate.
     pub verify_tls_cert: bool,
 
     /// Optional: Specific NTP server address to use after key exchange.
-    /// If None, uses the server provided during NTS-KE.
+    /// Currently unused; the NTP server from NTS-KE is always used.
     pub ntp_server: Option<SocketAddr>,
 
     /// NTP version to use (default: 4).
+    /// Currently unused; NTS is performed with NTPv4 only.
     pub ntp_version: u8,
 }
 
@@ -80,7 +81,7 @@ impl NtsClientConfig {
         self
     }
 
-    /// Set the maximum number of retries.
+    /// Set the maximum number of retries (currently unused).
     pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
@@ -98,7 +99,7 @@ impl NtsClientConfig {
         self
     }
 
-    /// Set the NTP version.
+    /// Set the NTP version (currently unused; NTPv4 is always used).
     pub fn with_ntp_version(mut self, version: u8) -> Self {
         self.ntp_version = version;
         self

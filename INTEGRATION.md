@@ -4,7 +4,7 @@ This document provides guidance on integrating `rkik-nts` with the rkik project.
 
 ## Overview
 
-`rkik-nts` is designed as a high-level, easy-to-use NTS client library that can be seamlessly integrated into rkik or any other Rust project requiring secure time synchronization.
+`rkik-nts` is a self-contained RFC 8915 client library that can be integrated into rkik or any other Rust project requiring authenticated time synchronization.
 
 ## Adding as a Dependency
 
@@ -12,7 +12,7 @@ This document provides guidance on integrating `rkik-nts` with the rkik project.
 
 ```toml
 [dependencies]
-rkik-nts = "0.4"
+rkik-nts = "1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -35,8 +35,7 @@ use std::time::Duration;
 /// Initialize an NTS client for rkik
 pub async fn init_nts_client(server: &str) -> Result<NtsClient, Box<dyn std::error::Error>> {
     let config = NtsClientConfig::new(server)
-        .with_timeout(Duration::from_secs(10))
-        .with_max_retries(3);
+        .with_timeout(Duration::from_secs(10));
 
     let mut client = NtsClient::new(config);
     client.connect().await?;
@@ -152,7 +151,7 @@ pub async fn sync_time_periodically(
 
 2. **Timeouts**: Set reasonable timeouts (5-10 seconds) to avoid blocking
 
-3. **Retries**: Configure 2-3 retries for transient network issues
+3. **Retries**: Implement retries in the caller; the library does not retry automatically yet
 
 4. **TLS Verification**: Always keep certificate verification enabled in production
 
@@ -236,5 +235,5 @@ This will show detailed logs of NTS-KE and time query operations.
 ## Support
 
 For issues specific to rkik-nts integration:
-- Open an issue at: https://github.com/yourusername/rkik-nts/issues
+- Open an issue at: https://github.com/aguacero7/rkik-nts/issues
 - Check the examples directory for reference implementations

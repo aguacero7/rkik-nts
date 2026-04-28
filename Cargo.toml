@@ -1,24 +1,20 @@
 [package]
 name = "rkik-nts"
-version = "0.4.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.70"
 authors = ["Aguacero7 <naps@teamnaps.fr>"]
 license = "GPL-2.0-or-later"
-description = "High-level NTS (Network Time Security) Client library based on ntpd-rs"
+description = "High-level NTS (Network Time Security) client library (RFC 8915)"
 repository = "https://github.com/aguacero7/rkik-nts"
 keywords = ["nts", "ntp", "time", "time-security", "client"]
 categories = ["network-programming", "date-and-time"]
 readme = "README.md"
 
 [dependencies]
-# Note: Using __internal-test feature temporarily until ntp-proto provides
-# stable public API for NTS key exchange. This feature exposes internal types
-# (KeyExchangeClient, KeyExchangeResult, SourceNtsData) required for NTS-KE.
-# TODO: Work with ntp-proto maintainers to stabilize these APIs or migrate to
-# alternative implementation when stable APIs become available.
-ntp-proto = { version = "1.6.2", features = ["__internal-test"] }
-tokio = { version = "1.40", features = ["net", "time", "rt-multi-thread", "macros"] }
+aes-siv = "0.7"
+rand = "0.8"
+tokio = { version = "1.40", features = ["net", "time", "rt-multi-thread", "macros", "io-util"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"
@@ -30,15 +26,19 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 x509-parser = "0.18"
 sha2 = "0.10"
 chrono = "0.4"
+zeroize = "1.8"
 
 [dev-dependencies]
 tokio-test = "0.4"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = []
 serde = ["dep:serde"]
 tracing-subscriber = ["dep:tracing-subscriber"]
+network-tests = []
+tls-keylog = []
+dangerous-configuration = []
 
 [lib]
 name = "rkik_nts"

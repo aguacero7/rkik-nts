@@ -1,6 +1,6 @@
 //! # rkik-nts
 //!
-//! A high-level NTS (Network Time Security) Client library based on ntpd-rs from the Pendulum Project.
+//! A high-level NTS (Network Time Security) client library for Rust.
 //!
 //! This library provides a simple, safe, and ergonomic API for querying time from NTS-secured NTP servers.
 //! It handles the complexity of NTS key exchange and authenticated time synchronization, making it easy
@@ -14,10 +14,10 @@
 //! - **Anti-Replay**: Unique identifiers prevent replay attacks
 //! - **Cookie Management**: Automatic cookie consumption and replenishment
 //! - **Certificate Diagnostics**: TLS certificate information capture for security auditing
-//! - **TLS Debugging**: SSLKEYLOGFILE support for Wireshark traffic analysis
+//! - **TLS Debugging**: optional `tls-keylog` feature for Wireshark traffic analysis
 //! - **Async/Await**: Built on Tokio for efficient async I/O
 //! - **Configurable**: Flexible configuration options for advanced use cases
-//! - **Based on ntpd-rs**: Built on the battle-tested ntpd-rs implementation from Project Pendulum
+//! - **Self-contained RFC 8915 implementation**: NTS-KE and NTS-protected NTP implemented directly in this crate
 //!
 //! ## Security
 //!
@@ -109,6 +109,7 @@
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+mod cipher;
 pub mod client;
 pub mod config;
 pub mod error;

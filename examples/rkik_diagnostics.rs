@@ -43,25 +43,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("NTS-KE Diagnostics:");
                 println!("  NTP Server:      {}", ke_info.ntp_server);
                 println!("  AEAD Algorithm:  {}", ke_info.aead_algorithm);
-                println!("  KE Duration:     {:?}", ke_info.ke_duration());
-                println!("  Cookie Count:    {}", ke_info.cookie_count());
-                println!("  Cookie Sizes:    {:?} bytes", ke_info.cookie_sizes());
-
-                // Verbose mode: Show raw cookie data (first few bytes)
-                println!("\n  Cookies (hex preview):");
-                for (i, cookie) in ke_info.cookies_ref().iter().enumerate() {
-                    let preview: Vec<String> = cookie
-                        .iter()
-                        .take(16)
-                        .map(|b| format!("{:02x}", b))
-                        .collect();
-                    println!(
-                        "    Cookie {}: {} {}",
-                        i + 1,
-                        preview.join(" "),
-                        if cookie.len() > 16 { "..." } else { "" }
-                    );
-                }
+                println!("  KE Duration:     {:?}", ke_info.ke_duration);
+                println!("  Initial Cookies: {}", ke_info.initial_cookie_count);
             }
         }
         Err(e) => {
@@ -176,7 +159,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("\nSecurity:");
         println!("  Protocol:        NTS (Network Time Security)");
         println!("  Encryption:      {}", ke_info.aead_algorithm);
-        println!("  Cookies Cached:  {}", ke_info.cookie_count());
+        println!("  Cookies Cached:  {}", client.cookie_count());
         println!("  Auth Status:     ✓ Authenticated");
     }
 

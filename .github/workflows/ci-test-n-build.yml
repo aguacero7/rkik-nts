@@ -1,0 +1,70 @@
+name: CI
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test-audit:
+    name: Build, Test, Audit
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        rust: [stable]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install audit tool
+        run: cargo install cargo-audit
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Build (debug, default features)
+        run: cargo build --verbose
+
+      - name: Test (default features)
+        run: cargo test
+
+      - name: Test (with serde)
+        run: cargo test --features serde
+        shell: bash
+
+      - name: Test (with tracing-subscriber)
+        run: cargo test --features tracing-subscriber
+        shell: bash
+
+      - name: Test (full feature set without network-tests)
+        run: cargo test --no-default-features --features "serde tracing-subscriber"
+        shell: bash
+
+      - name: Build (release, default features)
+        run: cargo build --release --verbose
+
+      - name: Build (release, serde only)
+        run: cargo build --release --no-default-features --features serde --verbose
+        shell: bash
+
+      - name: Build (release, full feature set without network-tests)
+        run: cargo build --release --no-default-features --features "serde tracing-subscriber" --verbose
+        shell: bash
+
+      - name: Audit dependencies
+        run: cargo audit --json || true

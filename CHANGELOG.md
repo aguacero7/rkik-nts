@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-28
+
+### Added
+- Complete self-contained RFC 8915 implementation for authenticated NTP queries
+- Live network test suite behind the `network-tests` feature
+- End-to-end coverage for Cloudflare and Netnod public NTS servers
+
+### Changed
+- Promoted crate version to `1.0.0` for stable integration into `rkik`
+- Derived NTS exporter keys with the correct NTPv4 protocol context
+- Serialized the NTS Authenticator (`0x0404`) in the server-compatible wire format
+- Removed dependency on unstable packet-building assumptions from earlier iterations
+- Tightened NTS-KE validation to require a successful `ntske/1` ALPN negotiation and a valid NTPv4 next-protocol response
+- Switched NTS-KE name resolution from blocking resolver calls inside async code to timeout-bounded async DNS resolution
+- Reworked query retry behavior to iterate across all resolved NTP server addresses instead of trusting a single first-resolved address
+- `max_retries` is now active for repeated time-query attempts instead of being a no-op configuration field
+- `ntp_server` configuration now overrides the negotiated NTP endpoint when explicit pinning is required
+- Restricted supported protocol version to NTPv4 only; unsupported configured versions now fail validation
+- Gated TLS key logging behind the explicit `tls-keylog` cargo feature instead of ambient `SSLKEYLOGFILE` activation alone
+
+### Fixed
+- Public NTS queries now authenticate successfully against real servers such as `time.cloudflare.com` and `nts.ntp.se`
+- PTB network coverage is treated as opportunistic in tests because PTB explicitly does not guarantee uninterrupted public service availability
+- Fixed AEAD algorithm negotiation parsing to accept valid server records containing multiple 16-bit algorithm identifiers
+- Fixed NTS-KE response handling to reject duplicate mandatory records, unknown critical records, explicit server error records, and warning records
+- Fixed missing timeouts on post-handshake NTS-KE reads and writes that could previously leave `connect()` hanging indefinitely
+- Fixed cookie lifecycle so cookies consumed for an in-flight request are restored after transport failure or timeout instead of being silently lost
+- Fixed UDP receive handling so stray or malformed packets are discarded until deadline instead of aborting the whole query on first bad datagram
+- Fixed malformed packet acceptance by rejecting duplicate Unique Identifier / authenticator fields, trailing bytes, malformed authenticated plaintext, and responses where the authenticator is not the final extension field
+- Fixed replay-handling weaknesses by rejecting zero transmit timestamps and duplicate authenticated server transmit timestamps
+- Fixed IPv4/IPv6 portability issues during live NTS polling by adding better socket binding fallback and multi-address iteration
+
+### Documentation
+- Updated crate docs, README and integration guidance for the `1.0.0` release line
+- Removed outdated claims that the crate is based on `ntpd-rs`
+- Documented that TLS key logging is a debugging-only feature and must not be enabled in production
+
+### Security
+- Disabling TLS certificate verification is now rejected unless the crate is compiled with the explicit `dangerous-configuration` feature
+- Exporter-derived key material and in-memory AEAD keys are now zeroized more aggressively during teardown
+- Added explicit Kiss-o'-Death surfacing and stricter authenticated response validation for safer production use
+
+### Testing
+- Added regression coverage for cookie restoration on failed transport, duplicate extension fields, trailing packet garbage, and duplicate authenticated transmit timestamps
+- Re-ran the full validation suite for the release: `cargo test`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --features network-tests`
+
 ## [0.4.0] - 2026-01-23
 
 ### Added
@@ -116,5 +162,6 @@ All notable changes to this project will be documented in this file.
 - Examples of basic and advanced usage
 - List of public NTS servers for testing
 
-[Unreleased]: https://github.com/aguacero7/rkik-nts/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/aguacero7/rkik-nts/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/aguacero7/rkik-nts/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/aguacero7/rkik-nts/compare/v0.3.0...v0.4.0

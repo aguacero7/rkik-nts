@@ -48,7 +48,8 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
         config.nts_ke_server, config.nts_ke_port
     );
 
-    let server_addrs = resolve_server(&config.nts_ke_server, config.nts_ke_port, config.timeout).await?;
+    let server_addrs =
+        resolve_server(&config.nts_ke_server, config.nts_ke_port, config.timeout).await?;
     debug!("Resolved NTS-KE server addresses: {server_addrs:?}");
 
     let (tls_config, captured_certs) = build_tls_config(config)?;
@@ -57,7 +58,9 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     let mut last_connect_error = None;
     let mut tcp_stream = None;
     for server_addr in &server_addrs {
-        match tokio::time::timeout(config.timeout, tokio::net::TcpStream::connect(server_addr)).await {
+        match tokio::time::timeout(config.timeout, tokio::net::TcpStream::connect(server_addr))
+            .await
+        {
             Ok(Ok(stream)) => {
                 tcp_stream = Some(stream);
                 break;
@@ -68,18 +71,25 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     }
     let tcp_stream = tcp_stream.ok_or_else(|| {
         Error::ServerUnavailable(
-            last_connect_error.unwrap_or_else(|| "unable to connect to any resolved address".to_string()),
+            last_connect_error
+                .unwrap_or_else(|| "unable to connect to any resolved address".to_string()),
         )
     })?;
 
     let server_name = rustls::pki_types::ServerName::try_from(config.nts_ke_server.as_str())
-        .map_err(|e| Error::Tls(format!("Invalid server name '{}': {e}", config.nts_ke_server)))?
+        .map_err(|e| {
+            Error::Tls(format!(
+                "Invalid server name '{}': {e}",
+                config.nts_ke_server
+            ))
+        })?
         .to_owned();
 
-    let mut tls_stream = tokio::time::timeout(config.timeout, connector.connect(server_name, tcp_stream))
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(|e| Error::Tls(format!("TLS handshake failed: {e}")))?;
+    let mut tls_stream =
+        tokio::time::timeout(config.timeout, connector.connect(server_name, tcp_stream))
+            .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(|e| Error::Tls(format!("TLS handshake failed: {e}")))?;
 
     debug!("TLS handshake complete");
 
@@ -96,9 +106,12 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
 
         // NTS Next Protocol Negotiation (type 1, critical, RFC 8915 §4.1.2).
         // Body: list of 2-byte protocol IDs. NTPv4 = 0x0000.
-        tokio::time::timeout(config.timeout, write_record(&mut tls_stream, true, 1, &[0x00, 0x00]))
-            .await
-            .map_err(|_| Error::Timeout)??;
+        tokio::time::timeout(
+            config.timeout,
+            write_record(&mut tls_stream, true, 1, &[0x00, 0x00]),
+        )
+        .await
+        .map_err(|_| Error::Timeout)??;
 
         // AEAD Algorithm Negotiation (type 4, critical).
         // Offer AEAD_AES_SIV_CMAC_256 (15) then AEAD_AES_SIV_CMAC_512 (17).
@@ -126,16 +139,21 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     let mut response_bytes = 0usize;
 
     loop {
-        let (critical, type_id, body) = tokio::time::timeout(config.timeout, read_record(&mut tls_stream))
-            .await
-            .map_err(|_| Error::Timeout)??;
+        let (critical, type_id, body) =
+            tokio::time::timeout(config.timeout, read_record(&mut tls_stream))
+                .await
+                .map_err(|_| Error::Timeout)??;
         record_count += 1;
         response_bytes = response_bytes.saturating_add(4 + body.len());
         if record_count > NTS_KE_MAX_RECORDS {
-            return Err(Error::KeyExchange("NTS-KE response exceeded record limit".to_string()));
+            return Err(Error::KeyExchange(
+                "NTS-KE response exceeded record limit".to_string(),
+            ));
         }
         if response_bytes > NTS_KE_MAX_RESPONSE_BYTES {
-            return Err(Error::KeyExchange("NTS-KE response exceeded size limit".to_string()));
+            return Err(Error::KeyExchange(
+                "NTS-KE response exceeded size limit".to_string(),
+            ));
         }
 
         match type_id {
@@ -155,7 +173,8 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
                 state.negotiated_protocol = protocols.contains(&NTPV4_PROTOCOL_ID);
                 if !state.negotiated_protocol {
                     return Err(Error::KeyExchange(
-                        "server did not negotiate NTPv4 in NTS Next Protocol Negotiation".to_string(),
+                        "server did not negotiate NTPv4 in NTS Next Protocol Negotiation"
+                            .to_string(),
                     ));
                 }
             }
@@ -183,11 +202,15 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
             // New Cookie for NTPv4
             5 => {
                 if body.is_empty() {
-                    return Err(Error::KeyExchange("server returned empty NTS cookie".to_string()));
+                    return Err(Error::KeyExchange(
+                        "server returned empty NTS cookie".to_string(),
+                    ));
                 }
                 state.cookie_bytes = state.cookie_bytes.saturating_add(body.len());
                 if state.cookie_bytes > NTS_KE_MAX_COOKIE_BYTES {
-                    return Err(Error::KeyExchange("server returned too much cookie data".to_string()));
+                    return Err(Error::KeyExchange(
+                        "server returned too much cookie data".to_string(),
+                    ));
                 }
                 debug!("Received cookie ({} bytes)", body.len());
                 state.cookies.push(body);
@@ -199,10 +222,13 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
                         "received duplicate NTPv4 Server Negotiation record".to_string(),
                     ));
                 }
-                let name = String::from_utf8(body)
-                    .map_err(|_| Error::KeyExchange("NTPv4 Server Negotiation is not valid UTF-8".to_string()))?;
+                let name = String::from_utf8(body).map_err(|_| {
+                    Error::KeyExchange("NTPv4 Server Negotiation is not valid UTF-8".to_string())
+                })?;
                 if name.is_empty() {
-                    return Err(Error::KeyExchange("NTPv4 Server Negotiation is empty".to_string()));
+                    return Err(Error::KeyExchange(
+                        "NTPv4 Server Negotiation is empty".to_string(),
+                    ));
                 }
                 debug!("NTS-KE negotiated NTP server: {name}");
                 state.ntp_server = Some(name);
@@ -227,7 +253,9 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
             2 => {
                 let errors = parse_u16_list(&body, "Error")?;
                 let code = errors.first().copied().unwrap_or_default();
-                return Err(Error::KeyExchange(format!("server returned NTS-KE error code {code}")));
+                return Err(Error::KeyExchange(format!(
+                    "server returned NTS-KE error code {code}"
+                )));
             }
             3 => {
                 let warnings = parse_u16_list(&body, "Warning")?;
@@ -336,9 +364,9 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
             .unwrap_or_else(|| config.nts_ke_server.clone());
         let ntp_port = state.ntp_port.unwrap_or(123);
         let addrs = resolve_server(&ntp_host, ntp_port, config.timeout).await?;
-        let primary = *addrs
-            .first()
-            .ok_or_else(|| Error::ServerUnavailable("No NTP server addresses resolved".to_string()))?;
+        let primary = *addrs.first().ok_or_else(|| {
+            Error::ServerUnavailable("No NTP server addresses resolved".to_string())
+        })?;
         (primary, addrs)
     };
 
@@ -512,25 +540,24 @@ fn build_tls_config(
 
     let captured_certs = Arc::new(Mutex::new(Vec::new()));
 
-    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
-        if config.verify_tls_cert {
-            let roots = load_root_certs();
-            let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
-                .build()
-                .map_err(|e| Error::Tls(format!("Failed to build TLS verifier: {e}")))?;
-            Arc::new(CapturingVerifier {
-                inner,
-                captured_certs: captured_certs.clone(),
-            })
-        } else {
-            warn!("TLS certificate verification is disabled!");
-            Arc::new(CapturingVerifier {
-                inner: Arc::new(NoVerification {
-                    provider: rustls::crypto::ring::default_provider().into(),
-                }),
-                captured_certs: captured_certs.clone(),
-            })
-        };
+    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> = if config.verify_tls_cert {
+        let roots = load_root_certs();
+        let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
+            .build()
+            .map_err(|e| Error::Tls(format!("Failed to build TLS verifier: {e}")))?;
+        Arc::new(CapturingVerifier {
+            inner,
+            captured_certs: captured_certs.clone(),
+        })
+    } else {
+        warn!("TLS certificate verification is disabled!");
+        Arc::new(CapturingVerifier {
+            inner: Arc::new(NoVerification {
+                provider: rustls::crypto::ring::default_provider().into(),
+            }),
+            captured_certs: captured_certs.clone(),
+        })
+    };
 
     let mut tls_config =
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -642,7 +669,11 @@ impl rustls::client::danger::ServerCertVerifier for NoVerification {
 }
 
 /// Resolve server address
-async fn resolve_server(server: &str, port: u16, timeout: std::time::Duration) -> Result<Vec<SocketAddr>> {
+async fn resolve_server(
+    server: &str,
+    port: u16,
+    timeout: std::time::Duration,
+) -> Result<Vec<SocketAddr>> {
     if let Ok(addr) = format!("{server}:{port}").parse::<SocketAddr>() {
         return Ok(vec![addr]);
     }
@@ -656,7 +687,9 @@ async fn resolve_server(server: &str, port: u16, timeout: std::time::Duration) -
     resolved.sort_unstable();
     resolved.dedup();
     if resolved.is_empty() {
-        return Err(Error::ServerUnavailable("No addresses resolved".to_string()));
+        return Err(Error::ServerUnavailable(
+            "No addresses resolved".to_string(),
+        ));
     }
     Ok(resolved)
 }
@@ -734,10 +767,7 @@ where
     use tokio::io::AsyncReadExt;
 
     let mut header = [0u8; 4];
-    reader
-        .read_exact(&mut header)
-        .await
-        .map_err(Error::Io)?;
+    reader.read_exact(&mut header).await.map_err(Error::Io)?;
 
     let critical = (header[0] & 0x80) != 0;
     let type_id = u16::from_be_bytes([header[0] & 0x7F, header[1]]);

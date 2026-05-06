@@ -11,9 +11,7 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "rkik_nts=debug".to_string()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "rkik_nts=debug".to_string()))
         .try_init();
 }
 
@@ -38,15 +36,24 @@ async fn test_nts_query_ntp_se() {
     client.connect().await.expect("NTS-KE to nts.ntp.se failed");
     let snap = client.get_time().await.expect("time query failed");
     assert!(snap.authenticated, "response must be NTS authenticated");
-    assert!(snap.round_trip_delay.as_millis() > 0, "RTT should be positive");
-    assert!(snap.round_trip_delay < Duration::from_secs(2), "RTT unreasonably large");
+    assert!(
+        snap.round_trip_delay.as_millis() > 0,
+        "RTT should be positive"
+    );
+    assert!(
+        snap.round_trip_delay < Duration::from_secs(2),
+        "RTT unreasonably large"
+    );
 }
 
 #[tokio::test]
 async fn test_nts_query_cloudflare() {
     let config = NtsClientConfig::new("time.cloudflare.com").with_timeout(TIMEOUT);
     let mut client = NtsClient::new(config);
-    client.connect().await.expect("NTS-KE to time.cloudflare.com failed");
+    client
+        .connect()
+        .await
+        .expect("NTS-KE to time.cloudflare.com failed");
     let snap = client.get_time().await.expect("time query failed");
     assert!(snap.authenticated);
     assert!(snap.round_trip_delay.as_millis() > 0);
@@ -120,7 +127,10 @@ async fn test_nts_reconnect_replenishes_cookies() {
 async fn test_nts_is_connected_lifecycle() {
     let config = NtsClientConfig::new("nts.ntp.se").with_timeout(TIMEOUT);
     let mut client = NtsClient::new(config);
-    assert!(!client.is_connected(), "should not be connected before connect()");
+    assert!(
+        !client.is_connected(),
+        "should not be connected before connect()"
+    );
     client.connect().await.unwrap();
     assert!(client.is_connected(), "should be connected after connect()");
 }

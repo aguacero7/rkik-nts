@@ -16,7 +16,6 @@ This library provides a simple, safe, and ergonomic API for querying time from N
 - **Async**: Built on Tokio for efficient async I/O
 - **Configurable**: Flexible configuration options for advanced use cases
 - **Self-contained**: NTS-KE and NTS-protected NTP are implemented directly in this crate
-- **Integration-ready**: Designed for seamless integration with [rkik](https://github.com/aguacero7/rkik)
 
 ## Quick Start
 
@@ -159,7 +158,7 @@ PTB servers are exercised opportunistically because PTB explicitly states that u
 
 ## Integration with rkik
 
-This library is designed for seamless integration with rkik, but can also be used as a standalone NTS client library. The API is intentionally kept simple and focused on authenticated time acquisition.
+This library was initially designed for seamless integration with rkik, but is now mainly meant to be used as a standalone NTS client library. The API is intentionally kept simple and focused on authenticated time acquisition.
 
 ## Architecture
 

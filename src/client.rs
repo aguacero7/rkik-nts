@@ -63,6 +63,7 @@ pub struct NtsClient {
 
 /// Diagnostic information from the NTS-KE handshake.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NtsKeInfo {
     /// The NTP server address negotiated during NTS-KE.
     pub ntp_server: SocketAddr,
@@ -126,8 +127,8 @@ impl NtsClient {
             ntp_server, initial_cookie_count
         );
 
-        // Create UDP socket for NTP queries
-        // Choose bind address based on server's address family
+        // Create UDP socket for NTP queries.
+        // Prefer IPv6 if any resolved address is IPv6; fall back to IPv4.
         let socket = if ntp_servers.iter().any(SocketAddr::is_ipv6) {
             match UdpSocket::bind("[::]:0").await {
                 Ok(socket) => socket,
@@ -136,6 +137,20 @@ impl NtsClient {
         } else {
             UdpSocket::bind("0.0.0.0:0").await?
         };
+
+        // Discard addresses that don't match the bound socket's address family.
+        // Sending an IPv4 SocketAddr through an IPv6 socket (or vice versa) triggers
+        // EAFNOSUPPORT on every attempt, wasting cookies and retries.
+        let socket_is_v6 = socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false);
+        let ntp_servers: Vec<SocketAddr> = ntp_servers
+            .into_iter()
+            .filter(|a| a.is_ipv6() == socket_is_v6)
+            .collect();
+        if ntp_servers.is_empty() {
+            return Err(Error::ServerUnavailable(
+                "no NTP server addresses are compatible with the bound socket family".to_string(),
+            ));
+        }
 
         // Extract NTS state for authenticated queries
         let nts_state = nts_result.into_nts_state();
@@ -264,8 +279,8 @@ impl NtsClient {
                     Err(_) => break,
                 };
 
-                if src.port() != target.port() {
-                    debug!("Discarding UDP packet from unexpected source port {}", src);
+                if src.ip() != target.ip() || src.port() != target.port() {
+                    debug!("Discarding UDP packet from unexpected source {}", src);
                     continue;
                 }
 

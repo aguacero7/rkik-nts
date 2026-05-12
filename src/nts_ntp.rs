@@ -33,7 +33,9 @@ const NTP_EPOCH_OFFSET: u64 = 2_208_988_800;
 /// Lower 32 bits: binary fraction of a second (1/2^32 s per unit).
 fn system_time_to_ntp(t: SystemTime) -> [u8; 8] {
     let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = (d.as_secs() + NTP_EPOCH_OFFSET) as u32;
+    // The 32-bit NTP seconds field wraps in 2036 (era 0 → era 1). The wrapping
+    // cast is intentional: era-1 timestamps are represented identically on the wire.
+    let secs = d.as_secs().wrapping_add(NTP_EPOCH_OFFSET) as u32;
     let frac = ((d.subsec_nanos() as u64 * (u32::MAX as u64 + 1)) / 1_000_000_000) as u32;
     let mut out = [0u8; 8];
     out[..4].copy_from_slice(&secs.to_be_bytes());
@@ -74,7 +76,7 @@ fn compute_ntp_offset(
     let rtt = ((t4 - t1) - (t3 - t2)).max(0) as u64;
 
     let network_ns = (t4 + theta).max(0) as u128;
-    let network_time = UNIX_EPOCH + Duration::from_nanos(network_ns as u64);
+    let network_time = UNIX_EPOCH + Duration::from_nanos(network_ns.min(u64::MAX as u128) as u64);
     (network_time, Duration::from_nanos(rtt))
 }
 
@@ -304,6 +306,12 @@ impl NtsState {
     ///
     /// Returns [`Error::MissingNtsCookie`] if the cookie pool is empty.
     pub fn create_request(&mut self) -> Result<Vec<u8>> {
+        // If a previous request was never answered, restore its cookie before consuming a new one.
+        if let Some(mut prev) = self.last_request.take() {
+            prev.unique_id.zeroize();
+            self.cookies.push_front(prev.pending_cookie);
+            self.send_time = None;
+        }
         if self.cookies.is_empty() {
             return Err(Error::MissingNtsCookie);
         }
@@ -419,7 +427,7 @@ impl NtsState {
                 "expected server mode 4, got {mode}"
             )));
         }
-        if stratum == 0 || stratum > 15 {
+        if stratum > 15 {
             return Err(Error::InvalidResponse(format!("invalid stratum {stratum}")));
         }
 

@@ -1,6 +1,6 @@
 [package]
 name = "rkik-nts"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.70"
 authors = ["aguacero7 <donaldinhodtp@gmail.com>"]
@@ -62,7 +62,7 @@ required-features = ["tracing-subscriber"]
 [[example]]
 name = "nts_ke_sslkeylog"
 path = "examples/nts_ke_sslkeylog.rs"
-required-features = ["tracing-subscriber"]
+required-features = ["tracing-subscriber", "tls-keylog"]
 
 [[example]]
 name = "test_certificate"

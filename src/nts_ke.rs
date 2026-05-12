@@ -258,11 +258,10 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
                 )));
             }
             3 => {
+                // RFC 8915: Warning records are advisory; do not abort the exchange.
                 let warnings = parse_u16_list(&body, "Warning")?;
                 let code = warnings.first().copied().unwrap_or_default();
-                return Err(Error::KeyExchange(format!(
-                    "server returned NTS-KE warning code {code}; aborting"
-                )));
+                warn!("NTS-KE server advisory warning code {code}; continuing");
             }
             _ if critical => {
                 return Err(Error::KeyExchange(format!(
@@ -346,7 +345,7 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
 
     // Extract certificate information captured during the TLS handshake.
     let certificate = {
-        let certs = captured_certs.lock().unwrap();
+        let certs = captured_certs.lock().unwrap_or_else(|e| e.into_inner());
         if certs.is_empty() {
             None
         } else {
@@ -393,8 +392,18 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
     })
 }
 
+fn asn1_time_to_rfc3339(t: x509_parser::time::ASN1Time) -> String {
+    use chrono::{DateTime, Utc};
+    DateTime::from_timestamp(t.timestamp(), 0)
+        .map(|dt: DateTime<Utc>| dt.to_rfc3339())
+        .unwrap_or_else(|| format!("{t}"))
+}
+
 fn parse_u16_list(body: &[u8], record_name: &str) -> Result<Vec<u16>> {
-    if body.len() < 2 || body.len() % 2 != 0 {
+    if body.is_empty() {
+        return Ok(Vec::new());
+    }
+    if body.len() % 2 != 0 {
         return Err(Error::KeyExchange(format!(
             "{record_name} record has invalid body length {}",
             body.len()
@@ -420,9 +429,9 @@ fn extract_certificate_info(certs: &[CertificateDer<'_>]) -> Option<CertificateI
     // Extract issuer
     let issuer = cert.issuer().to_string();
 
-    // Extract validity period and convert to RFC3339-like format
-    let valid_from = format!("{}", cert.validity().not_before);
-    let valid_until = format!("{}", cert.validity().not_after);
+    // Extract validity period in RFC3339 format via Unix timestamp.
+    let valid_from = asn1_time_to_rfc3339(cert.validity().not_before);
+    let valid_until = asn1_time_to_rfc3339(cert.validity().not_after);
 
     // Extract serial number as hex string
     let serial_number = format!("{:x}", cert.serial);
@@ -489,7 +498,10 @@ impl rustls::client::danger::ServerCertVerifier for CapturingVerifier {
         now: UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         // Capture the certificates
-        let mut certs = self.captured_certs.lock().unwrap();
+        let mut certs = self
+            .captured_certs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         certs.push(end_entity.clone().into_owned());
         for cert in intermediates {
             certs.push(cert.clone().into_owned());

@@ -44,6 +44,7 @@ pub struct CertificateInfo {
 
 /// Result of a time synchronization query.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TimeSnapshot {
     /// The current system time when the measurement was taken.

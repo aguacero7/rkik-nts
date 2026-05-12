@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **[Bug]** `parse_response`: the `stratum == 0` condition in the second check `if stratum == 0 || stratum > 15`
+  was dead code — `stratum == 0` is already handled by the Kiss-of-Death branch above. The redundant condition
+  has been removed ([nts_ntp.rs](src/nts_ntp.rs)).
+- **[Bug / RFC 8915]** NTS-KE records of type 3 (Warning) were treated as fatal errors, aborting the key
+  exchange. RFC 8915 specifies them as advisory; they are now logged via `warn!` and the exchange continues
+  normally ([nts_ke.rs](src/nts_ke.rs)).
+- **[Bug]** `parse_u16_list` rejected empty bodies with an error, making Warning/Error records without codes
+  unprocessable. Empty bodies now return `Vec::new()` ([nts_ke.rs](src/nts_ke.rs)).
+- **[Bug]** Silent truncation in `compute_ntp_offset`: `network_ns as u64` could silently truncate for values
+  above `u64::MAX`. Replaced with `.min(u64::MAX as u128) as u64` ([nts_ntp.rs](src/nts_ntp.rs)).
+- **[Security]** `CapturingVerifier` and certificate extraction used `.unwrap()` on a `Mutex`, causing a panic
+  on a poisoned mutex during a TLS handshake. Replaced with `.unwrap_or_else(|e| e.into_inner())`
+  ([nts_ke.rs](src/nts_ke.rs)).
+- **[Security]** Incoming UDP packet validation only checked the source port, not the source IP address. A
+  third-party host on port 123 could pass the initial filter before AEAD verification. The check now enforces
+  `src.ip() != target.ip() || src.port() != target.port()` ([client.rs](src/client.rs)).
+- **[Data quality]** `CertificateInfo::valid_from` and `valid_until` used x509-parser's `Display` format
+  (implementation-defined) despite the documentation stating RFC3339. They are now formatted via
+  `chrono::DateTime::to_rfc3339()` from the Unix timestamp ([nts_ke.rs](src/nts_ke.rs)).
+- **[Cargo]** The `nts_ke_sslkeylog` example did not declare `tls-keylog` in `required-features`, so it
+  compiled and ran silently without capturing any TLS keys. The feature is now required
+  ([Cargo.toml](Cargo.toml)).
+- **[Bug]** IPv4/IPv6 socket family mismatch in `connect()`: when the NTS-KE server resolved to both IPv4
+  and IPv6 addresses (e.g., Cloudflare), an IPv6 socket was bound but IPv4 addresses were still included in
+  the round-robin rotation. Every attempt to `send_to` an IPv4 address from an IPv6 socket fails with
+  `EAFNOSUPPORT`, consuming a cookie and a retry slot for nothing. Resolved NTP addresses are now filtered
+  to only include those whose family matches the bound socket ([client.rs](src/client.rs)).
+- **[Bug]** `NtsState::create_request` silently dropped the pending cookie if called a second time before
+  `parse_response` or `abandon_request`. The cookie was popped from the pool, stored as `pending_cookie`,
+  then overwritten and permanently lost. `create_request` now restores any in-flight cookie before consuming
+  a new one ([nts_ntp.rs](src/nts_ntp.rs)).
+
+### Changed
+
+- **[Y2036]** `system_time_to_ntp` now uses `wrapping_add` to make the intended NTP era rollover behaviour
+  explicit (era 0 ends 2036-02-07), with a comment documenting the semantics
+  ([nts_ntp.rs](src/nts_ntp.rs)).
+- `TimeSnapshot` and `NtsKeInfo` are now marked `#[non_exhaustive]`, allowing new fields to be added in
+  future minor versions without breaking downstream code that pattern-matches or constructs these types.
+
 ## [1.0.0] - 2026-04-28
 
 ### Added

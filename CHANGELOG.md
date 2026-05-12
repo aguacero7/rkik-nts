@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-12
+
 ### Fixed
 
 - **[Bug]** `parse_response`: the `stratum == 0` condition in the second check `if stratum == 0 || stratum > 15`

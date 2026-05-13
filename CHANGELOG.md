@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-05-13
+
+### Changed
+
+- Restored the MIT license that was in place since 1.0.0. The 1.1.0 release was incorrectly shipped under GPL-2.0-or-later; the license has been corrected back to MIT in both `Cargo.toml` and `LICENSE`.
+
 ## [1.1.0] - 2026-05-12
 
 ### Fixed

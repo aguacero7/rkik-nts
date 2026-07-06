@@ -177,6 +177,14 @@ fn scan_response_fields(data: &[u8]) -> Result<(Option<usize>, Option<Vec<u8>>)>
 /// Minimum number of cookies to maintain before requesting more.
 const MIN_COOKIE_COUNT: usize = 4;
 
+/// Upper bound on NTS Cookie Placeholder fields per request. RFC 8915 §5.7:
+/// "The client SHOULD NOT include more than seven NTS Cookie Placeholder
+/// extension fields in a request." With small cookies this cap can leave the
+/// request short of [`MIN_NTS_REQUEST_SIZE`], which is safe: the reply's size
+/// scales with cookie size, so a small-cookie reply is correspondingly small
+/// and does not trip the server's anti-amplification check.
+const MAX_COOKIE_PLACEHOLDERS: usize = 7;
+
 /// Minimum size, in bytes, of an NTS-protected NTP request.
 ///
 /// RFC 8915 anti-amplification (§5.7): an NTS server must never send a response
@@ -186,7 +194,8 @@ const MIN_COOKIE_COUNT: usize = 4;
 /// whose 96-byte cookies make even a single-cookie reply exceed a bare ~224-byte
 /// request; it caused NTS queries against chrony servers to time out.
 ///
-/// We pad requests with extra NTS Cookie Placeholder fields up to this floor.
+/// We pad requests with extra NTS Cookie Placeholder fields up to this floor
+/// (subject to [`MAX_COOKIE_PLACEHOLDERS`]).
 /// The value comfortably clears chrony's observed threshold for 96-byte cookies
 /// (~524 B) while staying well under the path MTU so packets are not fragmented.
 /// See <https://chrony-project.org/doc/spec/nts-compliant-128gcm.html>.
@@ -377,7 +386,8 @@ impl NtsState {
         // the pool toward MIN_COOKIE_COUNT and (b) bring the request up to
         // MIN_NTS_REQUEST_SIZE. Without (b) a freshly-keyed client (full pool)
         // sends a minimal request that servers such as chrony silently drop for
-        // large-cookie AEADs, making the query time out.
+        // large-cookie AEADs, making the query time out. The total is capped at
+        // MAX_COOKIE_PLACEHOLDERS per the same section of the RFC.
         let placeholder = vec![0u8; cookie_len];
         let placeholder_ef_len = 4 + ((cookie_len + 3) & !3);
         let refill = MIN_COOKIE_COUNT.saturating_sub(self.cookies.len());
@@ -386,7 +396,7 @@ impl NtsState {
         // Ceiling division (`usize::div_ceil` requires Rust 1.73; crate MSRV is 1.70).
         // `placeholder_ef_len` is always >= 4, so there is no division by zero.
         let pad_placeholders = (pad_bytes + placeholder_ef_len - 1) / placeholder_ef_len;
-        let n_placeholders = refill.max(pad_placeholders);
+        let n_placeholders = refill.max(pad_placeholders).min(MAX_COOKIE_PLACEHOLDERS);
         for _ in 0..n_placeholders {
             write_ef(&mut buf, 0x0304, &placeholder);
         }
@@ -786,10 +796,42 @@ mod tests {
             offset += l;
         }
         // 3 cookies, consume 1 → 2 remain; refill deficit = 2, and padding adds
-        // at least as many, so we must see at least the deficit.
+        // at least as many, so we must see at least the deficit — but never
+        // more than the RFC 8915 cap.
         assert!(
             placeholder_count >= 2,
             "expected at least the refill deficit (2) placeholders, got {placeholder_count}"
+        );
+        assert!(
+            placeholder_count <= MAX_COOKIE_PLACEHOLDERS,
+            "placeholder count exceeds RFC 8915 cap: {placeholder_count}"
+        );
+    }
+
+    #[test]
+    fn test_placeholder_count_capped_at_seven() {
+        // With 40-byte cookies, padding up to MIN_NTS_REQUEST_SIZE alone would
+        // take 10 placeholder fields, but RFC 8915 §5.7 says a client SHOULD
+        // NOT send more than seven per request. A full pool keeps the refill
+        // deficit at zero so only the padding path is exercised.
+        let cookies = vec![vec![0xABu8; 40]; 8];
+        let mut state = make_test_state(cookies);
+        let pkt = state.create_request().unwrap();
+
+        let mut placeholder_count = 0usize;
+        let mut offset = 48usize;
+        while offset + 4 <= pkt.len() {
+            let t = u16::from_be_bytes([pkt[offset], pkt[offset + 1]]);
+            let l = u16::from_be_bytes([pkt[offset + 2], pkt[offset + 3]]) as usize;
+            if t == 0x0304 {
+                placeholder_count += 1;
+            }
+            offset += l;
+        }
+        // Padding demand (10) exceeds the cap, so the clamp must engage exactly.
+        assert_eq!(
+            placeholder_count, MAX_COOKIE_PLACEHOLDERS,
+            "placeholder count must be clamped to the RFC 8915 maximum of seven"
         );
     }
 

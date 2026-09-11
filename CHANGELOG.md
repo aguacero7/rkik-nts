@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-11
+
+### Added
+
+- `TimeSnapshot::stratum`: the server stratum was already parsed and validated (1–15) but was dropped
+  before building the public snapshot, so callers had no way to read it ([types.rs](src/types.rs),
+  [client.rs](src/client.rs)).
+- `TimeSnapshot::reference_id`: raw Reference ID (NTP header bytes 12–15), which was not parsed before
+  ([nts_ntp.rs](src/nts_ntp.rs)).
+- `TimeSnapshot::reference_id_string()`: RFC 5905 §7.3 formatting of the Reference ID (ASCII source code for
+  stratum 1, IPv4 address for secondary servers over IPv4, hex hash over IPv6).
+
+`TimeSnapshot` is `#[non_exhaustive]`, so these additions are not breaking.
+
 ## [1.1.1] - 2026-05-13
 
 ### Changed

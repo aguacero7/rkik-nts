@@ -454,6 +454,7 @@ impl NtsState {
         let mode = data[0] & 0x07;
         let stratum = data[1];
         let _precision = data[3] as i8;
+        let reference_id: [u8; 4] = data[12..16].try_into().unwrap();
 
         if version != 4 {
             return Err(Error::InvalidResponse(format!(
@@ -600,6 +601,7 @@ impl NtsState {
             system_time: t4,
             round_trip_delay,
             stratum,
+            reference_id,
             authenticated: true,
         })
     }
@@ -628,6 +630,8 @@ pub struct NtsResponse {
     pub round_trip_delay: Duration,
     /// Server stratum level.
     pub stratum: u8,
+    /// Raw Reference ID (NTP header bytes 12–15).
+    pub reference_id: [u8; 4],
     /// Whether the response was cryptographically authenticated.
     pub authenticated: bool,
 }
@@ -656,6 +660,7 @@ mod tests {
             system_time,
             round_trip_delay: Duration::from_millis(50),
             stratum: 1,
+            reference_id: *b"GPS\0",
             authenticated: true,
         };
 
@@ -672,6 +677,7 @@ mod tests {
             system_time,
             round_trip_delay: Duration::from_millis(50),
             stratum: 1,
+            reference_id: *b"GPS\0",
             authenticated: true,
         };
 
@@ -921,6 +927,7 @@ mod tests {
 
         assert!(result.authenticated, "response must be authenticated");
         assert_eq!(result.stratum, 1);
+        assert_eq!(&result.reference_id, b"GPS\0");
         assert_eq!(state.cookie_count(), 1, "new cookie should be stored");
     }
 

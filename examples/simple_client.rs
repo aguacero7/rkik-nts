@@ -55,6 +55,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("  Round-trip:    {:?}", time.round_trip_delay);
                 println!("  Authenticated: {}", time.authenticated);
                 println!("  Server:        {}", time.server);
+                println!("  Stratum:       {}", time.stratum);
+                println!("  Reference ID:  {}", time.reference_id_string());
 
                 if time.is_ahead() {
                     println!("\n  ⚠ System clock is ahead of network time");

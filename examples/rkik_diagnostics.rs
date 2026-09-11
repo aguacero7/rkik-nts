@@ -72,6 +72,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("  Offset (abs):    {:?}", time.offset);
             println!("  Round-trip:      {:?}", time.round_trip_delay);
             println!("  Server:          {}", time.server);
+            println!("  Stratum:         {}", time.stratum);
+            println!("  Reference ID:    {}", time.reference_id_string());
             println!("  Authenticated:   {} ✓", time.authenticated);
 
             println!("\nClock Status:");

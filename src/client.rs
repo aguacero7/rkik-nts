@@ -347,6 +347,8 @@ impl NtsClient {
             round_trip_delay: nts_response.round_trip_delay,
             server: ntp_server.to_string(),
             authenticated: nts_response.authenticated,
+            stratum: nts_response.stratum,
+            reference_id: nts_response.reference_id,
         })
     }
 

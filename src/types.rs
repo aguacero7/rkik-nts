@@ -66,9 +66,41 @@ pub struct TimeSnapshot {
 
     /// Whether the response was authenticated via NTS.
     pub authenticated: bool,
+
+    /// Stratum reported by the NTP server (always 1–15 for a successful query).
+    pub stratum: u8,
+
+    /// Raw Reference ID from the NTP header (bytes 12–15, RFC 5905 §7.3).
+    ///
+    /// Use [`TimeSnapshot::reference_id_string`] for a human-readable form.
+    pub reference_id: [u8; 4],
 }
 
 impl TimeSnapshot {
+    /// Format the Reference ID following RFC 5905 §7.3.
+    ///
+    /// - Stratum 1: four-character ASCII source code (e.g. `GPS`, `PPS`), trailing NULs trimmed.
+    /// - Stratum 2+ over IPv4: IPv4 address of the upstream server.
+    /// - Stratum 2+ over IPv6: hex hash of the upstream IPv6 address (e.g. `0x1A2B3C4D`).
+    pub fn reference_id_string(&self) -> String {
+        let raw = self.reference_id;
+        if self.stratum == 1 && raw.is_ascii() {
+            return String::from_utf8_lossy(&raw)
+                .trim_end_matches('\0')
+                .to_string();
+        }
+        let server_is_ipv6 = self
+            .server
+            .parse::<std::net::SocketAddr>()
+            .map(|addr| addr.is_ipv6())
+            .unwrap_or(false);
+        if self.stratum == 1 || server_is_ipv6 {
+            format!("{:#X}", u32::from_be_bytes(raw))
+        } else {
+            std::net::Ipv4Addr::from(raw).to_string()
+        }
+    }
+
     /// Calculate the clock offset as a signed duration.
     /// Positive means system clock is ahead of network time.
     pub fn offset_signed(&self) -> i64 {
@@ -196,6 +228,8 @@ mod tests {
             round_trip_delay: Duration::from_millis(50),
             server: "test.server".to_string(),
             authenticated: true,
+            stratum: 1,
+            reference_id: *b"GPS\0",
         };
 
         assert!(snapshot.offset_signed() > 0);
@@ -215,11 +249,53 @@ mod tests {
             round_trip_delay: Duration::from_millis(50),
             server: "test.server".to_string(),
             authenticated: true,
+            stratum: 1,
+            reference_id: *b"GPS\0",
         };
 
         assert!(snapshot.offset_signed() < 0);
         assert!(!snapshot.is_ahead());
         assert!(snapshot.is_behind());
+    }
+
+    fn snapshot_with_ref(server: &str, stratum: u8, reference_id: [u8; 4]) -> TimeSnapshot {
+        let now = SystemTime::now();
+        TimeSnapshot {
+            system_time: now,
+            network_time: now,
+            offset: Duration::ZERO,
+            round_trip_delay: Duration::ZERO,
+            server: server.to_string(),
+            authenticated: true,
+            stratum,
+            reference_id,
+        }
+    }
+
+    #[test]
+    fn test_reference_id_string_stratum1_ascii() {
+        let s = snapshot_with_ref("162.159.200.1:123", 1, *b"GPS\0");
+        assert_eq!(s.reference_id_string(), "GPS");
+        let s = snapshot_with_ref("162.159.200.1:123", 1, *b"PPS\0");
+        assert_eq!(s.reference_id_string(), "PPS");
+    }
+
+    #[test]
+    fn test_reference_id_string_stratum1_non_ascii_falls_back_to_hex() {
+        let s = snapshot_with_ref("162.159.200.1:123", 1, [0xFF, 0x00, 0x10, 0x01]);
+        assert_eq!(s.reference_id_string(), "0xFF001001");
+    }
+
+    #[test]
+    fn test_reference_id_string_secondary_ipv4() {
+        let s = snapshot_with_ref("162.159.200.1:123", 3, [10, 1, 2, 3]);
+        assert_eq!(s.reference_id_string(), "10.1.2.3");
+    }
+
+    #[test]
+    fn test_reference_id_string_secondary_ipv6_is_hash() {
+        let s = snapshot_with_ref("[2606:4700:f1::1]:123", 2, [0x1A, 0x2B, 0x3C, 0x4D]);
+        assert_eq!(s.reference_id_string(), "0x1A2B3C4D");
     }
 
     #[test]

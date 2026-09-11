@@ -47,6 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Network time: {:?}", time.network_time);
     println!("Offset (ms): {} ms", time.offset_signed());
     println!("Authenticated: {}", time.authenticated);
+    println!("Stratum: {}", time.stratum);
+    println!("Reference ID: {}", time.reference_id_string());
 
     Ok(())
 }

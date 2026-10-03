@@ -16,7 +16,7 @@ use x509_parser::prelude::*;
 use zeroize::Zeroizing;
 
 use crate::cipher::{AeadCipher, AEAD_AES_SIV_CMAC_256, AEAD_AES_SIV_CMAC_512};
-use crate::config::NtsClientConfig;
+use crate::config::{AddressFamily, NtsClientConfig};
 use crate::error::{Error, Result};
 use crate::types::{CertificateInfo, NtsKeResult};
 
@@ -48,8 +48,13 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
         config.nts_ke_server, config.nts_ke_port
     );
 
-    let server_addrs =
-        resolve_server(&config.nts_ke_server, config.nts_ke_port, config.timeout).await?;
+    let server_addrs = resolve_server(
+        &config.nts_ke_server,
+        config.nts_ke_port,
+        config.timeout,
+        config.address_family,
+    )
+    .await?;
     debug!("Resolved NTS-KE server addresses: {server_addrs:?}");
 
     let (tls_config, captured_certs) = build_tls_config(config)?;
@@ -362,7 +367,8 @@ pub(crate) async fn perform_nts_ke(config: &NtsClientConfig) -> Result<NtsKeResu
             .clone()
             .unwrap_or_else(|| config.nts_ke_server.clone());
         let ntp_port = state.ntp_port.unwrap_or(123);
-        let addrs = resolve_server(&ntp_host, ntp_port, config.timeout).await?;
+        let addrs =
+            resolve_server(&ntp_host, ntp_port, config.timeout, config.address_family).await?;
         let primary = *addrs.first().ok_or_else(|| {
             Error::ServerUnavailable("No NTP server addresses resolved".to_string())
         })?;
@@ -680,28 +686,34 @@ impl rustls::client::danger::ServerCertVerifier for NoVerification {
     }
 }
 
-/// Resolve server address
+/// Resolve a server name to socket addresses, keeping only those allowed by `family`.
 async fn resolve_server(
     server: &str,
     port: u16,
     timeout: std::time::Duration,
+    family: AddressFamily,
 ) -> Result<Vec<SocketAddr>> {
-    if let Ok(addr) = format!("{server}:{port}").parse::<SocketAddr>() {
-        return Ok(vec![addr]);
-    }
+    let mut resolved: Vec<SocketAddr> =
+        if let Ok(addr) = format!("{server}:{port}").parse::<SocketAddr>() {
+            vec![addr]
+        } else if let Ok(ip) = server.parse::<std::net::IpAddr>() {
+            // Bare IPv6 literal, which "{server}:{port}" cannot express.
+            vec![SocketAddr::new(ip, port)]
+        } else {
+            tokio::time::timeout(timeout, tokio::net::lookup_host((server, port)))
+                .await
+                .map_err(|_| Error::Timeout)?
+                .map_err(|e| Error::ServerUnavailable(format!("DNS resolution failed: {e}")))?
+                .collect()
+        };
 
-    let addrs = tokio::time::timeout(timeout, tokio::net::lookup_host((server, port)))
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(|e| Error::ServerUnavailable(format!("DNS resolution failed: {e}")))?;
-
-    let mut resolved: Vec<_> = addrs.collect();
+    resolved.retain(|addr| family.matches(addr));
     resolved.sort_unstable();
     resolved.dedup();
     if resolved.is_empty() {
-        return Err(Error::ServerUnavailable(
-            "No addresses resolved".to_string(),
-        ));
+        return Err(Error::ServerUnavailable(format!(
+            "No {family} address found for '{server}'"
+        )));
     }
     Ok(resolved)
 }
@@ -789,6 +801,34 @@ where
     reader.read_exact(&mut body).await.map_err(Error::Io)?;
 
     Ok((critical, type_id, body))
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::resolve_server;
+    use crate::config::AddressFamily;
+    use crate::error::Error;
+    use std::time::Duration;
+
+    const T: Duration = Duration::from_secs(1);
+
+    #[tokio::test]
+    async fn test_literal_matching_family_is_kept() {
+        let v4 = resolve_server("192.0.2.1", 4460, T, AddressFamily::Ipv4).await;
+        assert_eq!(v4.unwrap(), vec!["192.0.2.1:4460".parse().unwrap()]);
+        let v6 = resolve_server("2001:db8::1", 4460, T, AddressFamily::Ipv6).await;
+        assert_eq!(v6.unwrap(), vec!["[2001:db8::1]:4460".parse().unwrap()]);
+        let any = resolve_server("192.0.2.1", 4460, T, AddressFamily::Any).await;
+        assert_eq!(any.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_literal_of_other_family_is_rejected() {
+        let err = resolve_server("192.0.2.1", 4460, T, AddressFamily::Ipv6).await;
+        assert!(matches!(err, Err(Error::ServerUnavailable(m)) if m.contains("IPv6")));
+        let err = resolve_server("2001:db8::1", 4460, T, AddressFamily::Ipv4).await;
+        assert!(matches!(err, Err(Error::ServerUnavailable(m)) if m.contains("IPv4")));
+    }
 }
 
 #[cfg(test)]

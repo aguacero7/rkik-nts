@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-03
+
+### Added
+
+- `AddressFamily` (`Any`, `Ipv4`, `Ipv6`) and `NtsClientConfig::address_family` /
+  `NtsClientConfig::with_address_family()`: restrict both the NTS-KE connection and the NTP queries to one
+  IP address family. The filter applies to the addresses resolved for the NTS-KE server and for the NTP
+  server negotiated during key exchange; if none is left, `connect()` fails with
+  `Error::ServerUnavailable`. An `ntp_server` override of the other family is rejected as
+  `Error::InvalidConfig`. The default, `Any`, keeps the previous behaviour ([config.rs](src/config.rs),
+  [nts_ke.rs](src/nts_ke.rs)).
+
+  `NtsClientConfig` gains a public field: code that builds it with a full struct literal must add
+  `address_family` or use `..Default::default()`. The builder API is unaffected.
+
+### Fixed
+
+- **[Bug]** A bare IPv6 literal (e.g. `2606:4700:f1::1`, without brackets) as NTS-KE server went through a
+  DNS lookup instead of being used directly ([nts_ke.rs](src/nts_ke.rs)).
+
+- **[Bug]** The cookie pool grew without bound. Anti-amplification padding (1.2.0) makes each request carry
+  more Cookie Placeholders than the pool needs, so every response returned more cookies than the request
+  consumed (8 → 12 → 16 → … with 96-byte cookies). The pool is now capped at eight cookies; when it is full
+  the oldest cookie is zeroized and dropped so the freshest ones are kept ([nts_ntp.rs](src/nts_ntp.rs)).
+- **[Bug]** Wrong server address reported on dual-stack hosts. `TimeSnapshot::server`, `NtsKeInfo::ntp_server`
+  and `NtsClient::ntp_server()` returned the first resolved address (IPv4, since addresses are sorted) even
+  when the client bound an IPv6 socket and queried an IPv6 address. They now return the address the query is
+  actually sent to, and `TimeSnapshot::server` is the address that answered. As a consequence
+  `TimeSnapshot::reference_id_string()` no longer picks its format from the wrong address family
+  ([client.rs](src/client.rs)).
+
+- **[Build]** `rustls` and `tokio-rustls` were pulled in with their default features, which add the
+  `aws-lc-rs` crypto provider on top of the `ring` one this crate actually uses. `aws-lc-sys` needs CMake
+  and a C11 toolchain, and its build broke on Windows runners shipping Visual Studio 18 ("couldn't
+  determine visual studio generator"). Default features are now disabled, so only `ring` is compiled
+  ([Cargo.toml](Cargo.toml)).
+
+### Security
+
+- `rustls` minimum raised to 0.23.45 for RUSTSEC-2026-0285 (TLS 1.3 handshake messages accepted across
+  encryption level boundaries).
+
 ## [1.3.0] - 2026-09-11
 
 ### Added

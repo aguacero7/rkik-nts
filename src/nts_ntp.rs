@@ -177,6 +177,15 @@ fn scan_response_fields(data: &[u8]) -> Result<(Option<usize>, Option<Vec<u8>>)>
 /// Minimum number of cookies to maintain before requesting more.
 const MIN_COOKIE_COUNT: usize = 4;
 
+/// Maximum number of cookies kept in the pool.
+///
+/// RFC 8915 §5.7 has servers hand out eight cookies at NTS-KE time and the
+/// client is expected to hold about that many. Anti-amplification padding makes
+/// a request carry more placeholders than the pool needs, so every response
+/// returns more cookies than the request consumed; without a cap the pool grows
+/// on every query.
+const MAX_COOKIE_COUNT: usize = 8;
+
 /// Upper bound on NTS Cookie Placeholder fields per request. RFC 8915 §5.7:
 /// "The client SHOULD NOT include more than seven NTS Cookie Placeholder
 /// extension fields in a request." With small cookies this cap can leave the
@@ -307,9 +316,17 @@ impl NtsState {
     }
 
     /// Add a new cookie to the pool.
+    ///
+    /// The pool is capped at [`MAX_COOKIE_COUNT`]; when it is full the oldest
+    /// cookie is discarded so the freshest ones are kept.
     pub fn store_cookie(&mut self, cookie: Vec<u8>) {
         trace!("Storing new cookie ({} bytes)", cookie.len());
         self.cookies.push_back(cookie);
+        while self.cookies.len() > MAX_COOKIE_COUNT {
+            if let Some(mut oldest) = self.cookies.pop_front() {
+                oldest.zeroize();
+            }
+        }
     }
 
     /// Restore the in-flight cookie after a transport failure.
@@ -1019,6 +1036,24 @@ mod tests {
         let resp = fake_server_response(&state, &new_cookies);
         state.parse_response(&resp).unwrap();
         assert_eq!(state.cookie_count(), 2);
+    }
+
+    #[test]
+    fn test_cookie_pool_is_capped() {
+        // A full pool plus a response carrying more cookies than were consumed
+        // (the padding placeholders) must not grow past MAX_COOKIE_COUNT, and
+        // the freshest cookies are the ones kept.
+        let mut state = make_test_state(vec![vec![0u8; 96]; MAX_COOKIE_COUNT]);
+        for round in 0..4u8 {
+            let _req = state.create_request().unwrap();
+            let fresh = vec![vec![0x10 + round; 96]; 5];
+            let resp = fake_server_response(&state, &fresh);
+            state.parse_response(&resp).unwrap();
+            assert_eq!(state.cookie_count(), MAX_COOKIE_COUNT);
+            // Distinct T3 per round, see the duplicate-transmit check.
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(state.cookies.back().unwrap(), &vec![0x13u8; 96]);
     }
 
     #[test]

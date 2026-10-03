@@ -4,7 +4,7 @@
 //! Run with: cargo test --features network-tests
 #![cfg(feature = "network-tests")]
 
-use rkik_nts::{Error, NtsClient, NtsClientConfig};
+use rkik_nts::{AddressFamily, Error, NtsClient, NtsClientConfig};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -133,4 +133,17 @@ async fn test_nts_is_connected_lifecycle() {
     );
     client.connect().await.unwrap();
     assert!(client.is_connected(), "should be connected after connect()");
+}
+
+#[tokio::test]
+async fn test_nts_forced_ipv4_queries_over_ipv4() {
+    let config = NtsClientConfig::new("time.cloudflare.com")
+        .with_timeout(TIMEOUT)
+        .with_address_family(AddressFamily::Ipv4);
+    let mut client = NtsClient::new(config);
+    client.connect().await.expect("NTS-KE over IPv4 failed");
+    assert!(client.ntp_server().unwrap().is_ipv4());
+    let snap = client.get_time().await.expect("time query failed");
+    let server: std::net::SocketAddr = snap.server.parse().unwrap();
+    assert!(server.is_ipv4(), "queried {server} despite forced IPv4");
 }

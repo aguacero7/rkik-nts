@@ -119,6 +119,6 @@ pub mod types;
 
 // Re-export main types for convenience
 pub use client::{NtsClient, NtsKeInfo};
-pub use config::NtsClientConfig;
+pub use config::{AddressFamily, NtsClientConfig};
 pub use error::{Error, Result};
 pub use types::{CertificateInfo, TimeSnapshot};

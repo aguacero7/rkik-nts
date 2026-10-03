@@ -6,6 +6,40 @@ use std::time::Duration;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+/// IP address family restriction for NTS-KE and NTP traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum AddressFamily {
+    /// Use whatever the resolver returns (IPv6 is preferred for NTP when available).
+    #[default]
+    Any,
+    /// Only use IPv4 addresses.
+    Ipv4,
+    /// Only use IPv6 addresses.
+    Ipv6,
+}
+
+impl AddressFamily {
+    /// Whether `addr` is allowed by this restriction.
+    pub fn matches(self, addr: &SocketAddr) -> bool {
+        match self {
+            AddressFamily::Any => true,
+            AddressFamily::Ipv4 => addr.is_ipv4(),
+            AddressFamily::Ipv6 => addr.is_ipv6(),
+        }
+    }
+}
+
+impl std::fmt::Display for AddressFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            AddressFamily::Any => "IP",
+            AddressFamily::Ipv4 => "IPv4",
+            AddressFamily::Ipv6 => "IPv6",
+        })
+    }
+}
+
 /// Configuration for an NTS client.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -38,6 +72,13 @@ pub struct NtsClientConfig {
     ///
     /// Only NTPv4 is supported by this crate.
     pub ntp_version: u8,
+
+    /// Restrict NTS-KE and NTP traffic to one IP address family.
+    ///
+    /// Applies to the addresses resolved for the NTS-KE server and to the NTP
+    /// server negotiated during key exchange. Defaults to [`AddressFamily::Any`].
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub address_family: AddressFamily,
 }
 
 impl Default for NtsClientConfig {
@@ -50,6 +91,7 @@ impl Default for NtsClientConfig {
             verify_tls_cert: true,
             ntp_server: None,
             ntp_version: 4,
+            address_family: AddressFamily::Any,
         }
     }
 }
@@ -113,6 +155,21 @@ impl NtsClientConfig {
         self
     }
 
+    /// Restrict NTS-KE and NTP traffic to one IP address family.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rkik_nts::{AddressFamily, NtsClientConfig};
+    ///
+    /// let config = NtsClientConfig::new("time.cloudflare.com")
+    ///     .with_address_family(AddressFamily::Ipv6);
+    /// ```
+    pub fn with_address_family(mut self, family: AddressFamily) -> Self {
+        self.address_family = family;
+        self
+    }
+
     /// Validate the configuration.
     pub(crate) fn validate(&self) -> crate::error::Result<()> {
         if self.nts_ke_server.is_empty() {
@@ -131,6 +188,15 @@ impl NtsClientConfig {
             return Err(crate::error::Error::InvalidConfig(
                 "only NTPv4 is supported".to_string(),
             ));
+        }
+
+        if let Some(addr) = self.ntp_server {
+            if !self.address_family.matches(&addr) {
+                return Err(crate::error::Error::InvalidConfig(format!(
+                    "NTP server override {addr} is not an {} address",
+                    self.address_family
+                )));
+            }
         }
 
         if !self.verify_tls_cert && !cfg!(feature = "dangerous-configuration") {
@@ -212,6 +278,35 @@ mod tests {
         let config = NtsClientConfig::new("test.server.com").with_tls_verification(false);
         assert!(!config.verify_tls_cert);
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_address_family_defaults_to_any() {
+        let config = NtsClientConfig::new("test.server.com");
+        assert_eq!(config.address_family, AddressFamily::Any);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_address_family_matches() {
+        let v4: SocketAddr = "192.0.2.1:123".parse().unwrap();
+        let v6: SocketAddr = "[2001:db8::1]:123".parse().unwrap();
+        assert!(AddressFamily::Any.matches(&v4) && AddressFamily::Any.matches(&v6));
+        assert!(AddressFamily::Ipv4.matches(&v4) && !AddressFamily::Ipv4.matches(&v6));
+        assert!(AddressFamily::Ipv6.matches(&v6) && !AddressFamily::Ipv6.matches(&v4));
+    }
+
+    #[test]
+    fn test_ntp_server_override_must_match_address_family() {
+        let config = NtsClientConfig::new("test.server.com")
+            .with_ntp_server("192.0.2.1:123".parse().unwrap())
+            .with_address_family(AddressFamily::Ipv6);
+        assert!(config.validate().is_err());
+
+        let config = NtsClientConfig::new("test.server.com")
+            .with_ntp_server("[2001:db8::1]:123".parse().unwrap())
+            .with_address_family(AddressFamily::Ipv6);
+        assert!(config.validate().is_ok());
     }
 
     #[test]

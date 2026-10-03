@@ -115,17 +115,11 @@ impl NtsClient {
         // Perform NTS key exchange
         let nts_result = perform_nts_ke(&self.config).await?;
 
-        let ntp_server = nts_result.ntp_server;
         let ntp_servers = nts_result.ntp_server_addrs.clone();
         let aead_algorithm = nts_result.aead_algorithm.clone();
         let ke_duration = nts_result.ke_duration();
         let certificate = nts_result.certificate.clone();
         let initial_cookie_count = nts_result.cookie_count();
-
-        info!(
-            "NTS key exchange successful. NTP server: {}, cookies: {}",
-            ntp_server, initial_cookie_count
-        );
 
         // Create UDP socket for NTP queries.
         // Prefer IPv6 if any resolved address is IPv6; fall back to IPv4.
@@ -151,6 +145,15 @@ impl NtsClient {
                 "no NTP server addresses are compatible with the bound socket family".to_string(),
             ));
         }
+
+        // Report the address queries are actually sent to: the first one that
+        // survived the family filter, not the first one resolved.
+        let ntp_server = ntp_servers[0];
+
+        info!(
+            "NTS key exchange successful. NTP server: {}, cookies: {}",
+            ntp_server, initial_cookie_count
+        );
 
         // Extract NTS state for authenticated queries
         let nts_state = nts_result.into_nts_state();
@@ -216,9 +219,6 @@ impl NtsClient {
             Error::Other("No NTS state available. Call connect() first.".to_string())
         })?;
 
-        let ntp_server = self.ntp_server.ok_or_else(|| {
-            Error::Other("No NTP server configured. Call connect() first.".to_string())
-        })?;
         if self.ntp_servers.is_empty() {
             return Err(Error::Other(
                 "No NTP server addresses resolved. Call connect() first.".to_string(),
@@ -242,6 +242,7 @@ impl NtsClient {
             .saturating_add(1)
             .max(self.ntp_servers.len() as u32);
         let mut nts_response = None;
+        let mut responding_server = self.ntp_servers[0];
 
         for attempt in 0..max_attempts {
             let request = nts_state.create_request()?;
@@ -289,6 +290,7 @@ impl NtsClient {
                 match nts_state.parse_response(packet) {
                     Ok(response) => {
                         nts_response = Some(response);
+                        responding_server = target;
                         break;
                     }
                     Err(
@@ -345,7 +347,7 @@ impl NtsClient {
             network_time: nts_response.network_time,
             offset,
             round_trip_delay: nts_response.round_trip_delay,
-            server: ntp_server.to_string(),
+            server: responding_server.to_string(),
             authenticated: nts_response.authenticated,
             stratum: nts_response.stratum,
             reference_id: nts_response.reference_id,
